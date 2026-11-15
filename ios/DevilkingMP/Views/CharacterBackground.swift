@@ -99,7 +99,7 @@ struct DKCharacterHeader: View {
                         .init(color: DKTheme.background, location: 1)
                     ], startPoint: .top, endPoint: .bottom)
                 }
-                .frame(width: geometry.size.width, height: geometry.size.height)
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topTrailing)
                 .clipped()
             }
             .frame(height: 128)
