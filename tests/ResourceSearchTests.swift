@@ -15,6 +15,13 @@ final class ResourceSearchTests: XCTestCase {
         let config=URLSessionConfiguration.ephemeral;config.protocolClasses=[MockHTTP.self]
         return APIClient(profile:ServiceProfile(kind:.moviepilot,baseURL:base,username:"fixture"),credentials:Credential(username:"fixture",apiKey:"fixture-key"),session:URLSession(configuration:config))
     }
+    /// Foundation URL.path may remove a terminal slash on Apple platforms.
+    /// Route mocks compare a canonical path; raw wire-path assertions use URLComponents.
+    private func path(_ request:URLRequest)->String {
+        var path=URLComponents(url:request.url!,resolvingAgainstBaseURL:false)!.percentEncodedPath
+        while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
+        return path
+    }
     private func json(_ value:Any)->Data { try! JSONSerialization.data(withJSONObject:value) }
     private func envelope(_ value:Any)->Data { json(["success":true,"message":"","data":value]) }
     private func row(id:String="345",page:String?=nil,enclosure:String?=nil,site:Int=1)->[String:Any] {
@@ -32,8 +39,8 @@ final class ResourceSearchTests: XCTestCase {
         return (try? JSONSerialization.jsonObject(with:data)) as? [String:Any] ?? [:]
     }
     private func configResponse(_ r:URLRequest)->Data? {
-        switch r.url!.path {
-        case "/api/v1/site/":return envelope([["id":1,"name":"测试站点","is_active":true]])
+        switch self.path(r) {
+        case "/api/v1/site":return envelope([["id":1,"name":"测试站点","is_active":true]])
         case "/api/v1/download/clients":return envelope([["name":"Fixture qB","type":"qbittorrent"]])
         case "/api/v1/system/settings/describe/Downloaders":return envelope(["value":[["name":"Fixture qB","type":"qbittorrent","enabled":true,"default":true,"config":["host":"http://fixture-qb","port":8085,"password":"fixture-masked"]]]])
         case "/api/v1/download/paths":return envelope([["name":"测试目录","storage":"local","save_path":"/downloads/fixture"]])
@@ -96,28 +103,28 @@ final class ResourceSearchTests: XCTestCase {
     func testSearchRequiresExplicitSitesAndNeverFetchesSharedLastCache() async throws {
         let log=ResourceFixtureLog()
         MockHTTP.handler={ request in
-            log.append(request.url!.path)
-            if request.url!.path == "/api/v1/site/" { return (200,[:],self.envelope([["id":1,"name":"测试站点","is_active":true]])) }
-            XCTAssertEqual(request.httpMethod,"GET");XCTAssertEqual(request.url!.path,"/api/v1/search/title")
+            log.append(self.path(request))
+            if self.path(request) == "/api/v1/site" { return (200,[:],self.envelope([["id":1,"name":"测试站点","is_active":true]])) }
+            XCTAssertEqual(request.httpMethod,"GET");XCTAssertEqual(self.path(request),"/api/v1/search/title")
             let q=URLComponents(url:request.url!,resolvingAgainstBaseURL:false)!.queryItems!
             XCTAssertEqual(q.first(where:{$0.name == "sites"})?.value,"1");XCTAssertEqual(q.first(where:{$0.name == "keyword"})?.value,"合成作品")
             XCTAssertEqual(request.timeoutInterval,125)
             return (200,[:],self.envelope([self.row()]))
         }
         let result=try await client().searchResources(query:"合成作品",sites:["1"])
-        XCTAssertEqual(result.count,1);XCTAssertEqual(log.values,["/api/v1/site/","/api/v1/search/title"])
+        XCTAssertEqual(result.count,1);XCTAssertEqual(log.values,["/api/v1/site","/api/v1/search/title"])
     }
     func testEmptySitesBlockedBeforeNetworkAndForeignResultFailsClosed() async {
-        let log=ResourceFixtureLog();MockHTTP.handler={r in log.append(r.url!.path);return (200,[:],self.envelope([]))}
+        let log=ResourceFixtureLog();MockHTTP.handler={r in log.append(self.path(r));return (200,[:],self.envelope([]))}
         do { _=try await client().searchResources(query:"合成作品",sites:[]);XCTFail() } catch {}
         XCTAssertTrue(log.values.isEmpty)
-        MockHTTP.handler={r in if r.url!.path == "/api/v1/site/" { return (200,[:],self.envelope([["id":1,"name":"测试站点","is_active":true]])) };return (200,[:],self.envelope([self.row(site:2)])) }
+        MockHTTP.handler={r in if self.path(r) == "/api/v1/site" { return (200,[:],self.envelope([["id":1,"name":"测试站点","is_active":true]])) };return (200,[:],self.envelope([self.row(site:2)])) }
         do { _=try await client().searchResources(query:"合成作品",sites:["1"]);XCTFail() } catch {}
     }
     func testExactSearchKeepsSourceAndSpecialsSeasonZero() async throws {
         MockHTTP.handler={r in
-            if r.url!.path == "/api/v1/site/" { return (200,[:],self.envelope([["id":1,"name":"测试站点","is_active":true]])) }
-            XCTAssertEqual(r.url!.path,"/api/v1/search/media/777")
+            if self.path(r) == "/api/v1/site" { return (200,[:],self.envelope([["id":1,"name":"测试站点","is_active":true]])) }
+            XCTAssertEqual(self.path(r),"/api/v1/search/media/777")
             let q=URLComponents(url:r.url!,resolvingAgainstBaseURL:false)!.queryItems!
             XCTAssertEqual(q.first(where:{$0.name == "season"})?.value,"0");XCTAssertEqual(q.first(where:{$0.name == "media_source"})?.value,"douban")
             return (200,[:],self.envelope([]))
@@ -127,18 +134,18 @@ final class ResourceSearchTests: XCTestCase {
     }
     func testOnlyExplicitNoResultsIsEmptyWhileBusinessFalseAndMalformedRemainErrors() async throws {
         for response in [["success":false,"message":"未搜索到任何资源"], ["success":false,"message":"failure https://tracker.example?passkey=secret"], ["data":[]]] as [[String:Any]] {
-            MockHTTP.handler={r in if r.url!.path == "/api/v1/site/" { return (200,[:],self.envelope([["id":1,"name":"测试站点","is_active":true]])) };return (200,[:],self.json(response)) }
+            MockHTTP.handler={r in if self.path(r) == "/api/v1/site" { return (200,[:],self.envelope([["id":1,"name":"测试站点","is_active":true]])) };return (200,[:],self.json(response)) }
             do { let result=try await client().searchResources(query:"作品",sites:["1"]);XCTAssertEqual(response["message"] as? String,"未搜索到任何资源");XCTAssertTrue(result.isEmpty) }
             catch { XCTAssertNotEqual(response["message"] as? String,"未搜索到任何资源");XCTAssertFalse(error.localizedDescription.contains("secret")) }
         }
     }
     func testReadOnlyDeniesDownloadBeforeAuthenticationOrConfigurationReads() async {
-        let log=ResourceFixtureLog();MockHTTP.handler={r in log.append(r.url!.path);return (200,[:],self.envelope([]))}
+        let log=ResourceFixtureLog();MockHTTP.handler={r in log.append(self.path(r));return (200,[:],self.envelope([]))}
         do { _=try await client().downloadResource(request(),authorize:{false},beforeSend:{log.append("intent")});XCTFail() } catch {}
         XCTAssertTrue(log.values.isEmpty)
     }
     func testChangedInMemoryPayloadCannotDownloadDifferentResourceUnderOldIdentity() async {
-        let log=ResourceFixtureLog();MockHTTP.handler={r in log.append(r.url!.path);return (200,[:],self.envelope([]))}
+        let log=ResourceFixtureLog();MockHTTP.handler={r in log.append(self.path(r));return (200,[:],self.envelope([]))}
         var changed=request();changed.item.payload=MPResourceParser.item(row(id:"999"))!.payload
         do { _=try await client().downloadResource(changed,authorize:{true},beforeSend:{log.append("intent")});XCTFail() } catch {}
         XCTAssertTrue(log.values.isEmpty)
@@ -146,39 +153,40 @@ final class ResourceSearchTests: XCTestCase {
     func testDefaultDirectoryIsOmittedAndDurableIntentPrecedesSinglePost() async throws {
         let log=ResourceFixtureLog()
         MockHTTP.handler={r in
-            log.append(r.url!.path)
+            log.append(self.path(r))
             if let data=self.configResponse(r) { return (200,[:],data) }
-            XCTAssertEqual(r.url!.path,"/api/v1/download/");XCTAssertEqual(r.httpMethod,"POST")
+            XCTAssertEqual(self.path(r),"/api/v1/download");XCTAssertEqual(r.httpMethod,"POST")
+            XCTAssertEqual(URLComponents(url:r.url!,resolvingAgainstBaseURL:false)?.percentEncodedPath,"/api/v1/download/")
             let payload=self.body(r);XCTAssertNil(payload["save_path"]);XCTAssertEqual(payload["downloader"] as? String,"Fixture qB")
             XCTAssertNotNil(payload["media_in"]);XCTAssertNotNil(payload["torrent_in"]);XCTAssertNil(payload["context"])
             XCTAssertTrue(log.values.contains("intent"));return (200,[:],self.envelope(["download_id":"fixturehash"]))
         }
         let id=try await client().downloadResource(request(),authorize:{true},beforeSend:{log.append("intent")})
-        XCTAssertEqual(id,"fixturehash");XCTAssertEqual(log.values.filter{$0 == "/api/v1/download/"}.count,1)
+        XCTAssertEqual(id,"fixturehash");XCTAssertEqual(log.values.filter{$0 == "/api/v1/download"}.count,1)
         XCTAssertFalse(log.values.contains("/api/v1/download/paths"))
     }
     func testChangedPresetBlocksBeforeIntentOrPost() async {
         let log=ResourceFixtureLog();MockHTTP.handler={r in
-            log.append(r.url!.path)
-            if r.url!.path == "/api/v1/download/paths" { return (200,[:],self.envelope([])) }
+            log.append(self.path(r))
+            if self.path(r) == "/api/v1/download/paths" { return (200,[:],self.envelope([])) }
             return (200,[:],self.configResponse(r) ?? self.envelope(["download_id":"unexpected"]))
         }
         do { _=try await client().downloadResource(request(directory:directory),authorize:{true},beforeSend:{log.append("intent")});XCTFail() } catch {}
-        XCTAssertFalse(log.values.contains("intent"));XCTAssertFalse(log.values.contains("/api/v1/download/"))
+        XCTAssertFalse(log.values.contains("intent"));XCTAssertFalse(log.values.contains("/api/v1/download"))
     }
     func testDisabledSiteBlocksBeforeIntentOrPost() async {
         let log=ResourceFixtureLog();MockHTTP.handler={r in
-            log.append(r.url!.path)
-            if r.url!.path == "/api/v1/site/" { return (200,[:],self.envelope([["id":1,"name":"测试站点","is_active":false]])) }
+            log.append(self.path(r))
+            if self.path(r) == "/api/v1/site" { return (200,[:],self.envelope([["id":1,"name":"测试站点","is_active":false]])) }
             return (200,[:],self.configResponse(r) ?? self.envelope(["download_id":"unexpected"]))
         }
         do { _=try await client().downloadResource(request(),authorize:{true},beforeSend:{log.append("intent")});XCTFail() } catch {}
-        XCTAssertEqual(log.values,["/api/v1/site/"])
+        XCTAssertEqual(log.values,["/api/v1/site"])
     }
     func testAuthorizationRevokedAfterIntentPreventsPostButPreservesUnknownIntent() async {
-        let log=ResourceFixtureLog();MockHTTP.handler={r in log.append(r.url!.path);return (200,[:],self.configResponse(r) ?? self.envelope(["download_id":"unexpected"]))}
+        let log=ResourceFixtureLog();MockHTTP.handler={r in log.append(self.path(r));return (200,[:],self.configResponse(r) ?? self.envelope(["download_id":"unexpected"]))}
         do { _=try await client().downloadResource(request(),authorize:{!log.values.contains("intent")},beforeSend:{log.append("intent")});XCTFail() } catch {}
-        XCTAssertTrue(log.values.contains("intent"));XCTAssertFalse(log.values.contains("/api/v1/download/"))
+        XCTAssertTrue(log.values.contains("intent"));XCTAssertFalse(log.values.contains("/api/v1/download"))
     }
     func testUnknownDownloadResultIsNeverRetried() async {
         let log=ResourceFixtureLog();MockHTTP.handler={r in

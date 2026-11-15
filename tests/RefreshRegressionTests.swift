@@ -121,16 +121,16 @@ final class RefreshRegressionTests:XCTestCase {
         model.preferences.setBoundDownloaderKind(.tr,for:downloader.bindingID,baseURL:model.profile(.moviepilot).baseURL)
         XCTAssertFalse(model.canDownloadResource(downloader))
     }
-    @MainActor func testResourceResultFromAnotherConnectionCannotSendAnyRequest() async {
+    @MainActor func testResourceResultFromAnotherConnectionCannotSendAnyRequest() async throws {
         let name="RefreshTest."+UUID().uuidString,defaults=UserDefaults(suiteName:name)!
         defer{defaults.removePersistentDomain(forName:name)}
         let session=session()
         let model=AppModel(defaults:defaults,credentialReader:{_ in Credential(username:"fixture",password:"test-only",apiKey:"")},clientFactory:{APIClient(profile:$0,credentials:$1,session:session)})
         model.profiles=ServiceKind.allCases.map{ServiceProfile(kind:$0,baseURL:$0.defaultURL,username:"fixture",allowActions:true)}
         model.readOnlyMode=false;model.migrationProtection=false
-        let downloader=UITestFixtures.resourceDownloaders().first!
+        let downloader=try XCTUnwrap(UITestFixtures.resourceDownloaders().first)
         model.preferences.setBoundDownloaderKind(.qb1,for:downloader.bindingID,baseURL:model.profile(.moviepilot).baseURL)
-        var item=UITestFixtures.resourceSearch("测试",sites:["1"]).first!
+        var item=try XCTUnwrap(UITestFixtures.resourceSearch("星海远航",sites:["1"]).first)
         item.connectionToken=UUID() // A different MP account / connection epoch.
         XCTAssertFalse(model.isCurrentResource(item))
         let sent=await model.downloadResource(MPResourceDownloadRequest(item:item,downloader:downloader))
