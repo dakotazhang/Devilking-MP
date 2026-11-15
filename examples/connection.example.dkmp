@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "services": [
+    {"kind": "qb1", "baseURL": "http://192.168.1.100:8085", "username": "CHANGE_ME", "password": "CHANGE_ME"},
+    {"kind": "qb2", "baseURL": "http://192.168.1.100:8086", "username": "CHANGE_ME", "password": "CHANGE_ME"},
+    {"kind": "tr", "baseURL": "http://192.168.1.100:9091", "username": "CHANGE_ME", "password": "CHANGE_ME"},
+    {"kind": "moviepilot", "baseURL": "http://192.168.1.100:3000", "username": "CHANGE_ME", "password": "CHANGE_ME"},
+    {"kind": "emby", "baseURL": "http://192.168.1.100:8096", "username": "CHANGE_ME", "password": "CHANGE_ME"}
+  ]
+}

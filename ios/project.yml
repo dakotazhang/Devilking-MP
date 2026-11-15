@@ -1,0 +1,100 @@
+name: DevilkingMP
+options:
+  minimumXcodeGenVersion: 2.38.0
+  deploymentTarget:
+    iOS: "16.1"
+  createIntermediateGroups: true
+  developmentLanguage: zh-Hans
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.1"
+    TARGETED_DEVICE_FAMILY: "1"
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    DEVELOPMENT_TEAM: ""
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    CLANG_ENABLE_MODULES: YES
+    GCC_WARN_64_TO_32_BIT_CONVERSION: YES
+    SWIFT_EMIT_LOC_STRINGS: NO
+  configs:
+    Debug:
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+      DEBUG_INFORMATION_FORMAT: dwarf
+    Release:
+      SWIFT_COMPILATION_MODE: wholemodule
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+      DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+targets:
+  DevilkingMP:
+    type: application
+    platform: iOS
+    sources:
+      - path: DevilkingMP
+        excludes:
+          - Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: top.devilkkkkk1.DevilkingMP
+        PRODUCT_NAME: DevilkingMP
+        INFOPLIST_FILE: DevilkingMP/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        MARKETING_VERSION: "1.1.0"
+        CURRENT_PROJECT_VERSION: "2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/Frameworks"
+    dependencies:
+      - sdk: LocalAuthentication.framework
+      - sdk: Security.framework
+  DevilkingMPTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ../tests/CoreTests.swift
+      - path: ../tests/DashboardTests.swift
+      - path: ../tests/DiscoveryTests.swift
+      - path: ../tests/ReadOnlyRegressionTests.swift
+      - path: ../tests/SubscriptionLedgerTests.swift
+    dependencies:
+      - target: DevilkingMP
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: top.devilkkkkk1.DevilkingMP.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/DevilkingMP.app/DevilkingMP"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+  DevilkingMPUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: ../tests/UITests.swift
+    dependencies:
+      - target: DevilkingMP
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: top.devilkkkkk1.DevilkingMP.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: DevilkingMP
+        SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+schemes:
+  DevilkingMP:
+    build:
+      targets:
+        DevilkingMP: all
+        DevilkingMPTests: [test]
+        DevilkingMPUITests: [test]
+    test:
+      gatherCoverageData: true
+      targets:
+        - name: DevilkingMPTests
+          parallelizable: false
+        - name: DevilkingMPUITests
+          parallelizable: false
+    archive:
+      configuration: Release

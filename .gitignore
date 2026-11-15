@@ -1,0 +1,17 @@
+.DS_Store
+private/
+evidence/
+build/
+dist/
+*.xcuserstate
+xcuserdata/
+*.devilking.json
+*.dkmp
+!examples/connection.example.dkmp
+.env
+.env.*
+*.mobileprovision
+*.p12
+*.key
+__pycache__/
+ios/*.xcodeproj/

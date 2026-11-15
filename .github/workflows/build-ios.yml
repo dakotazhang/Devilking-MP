@@ -1,0 +1,75 @@
+name: Build iOS app
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: devilking-ios-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Verify build environment
+        run: |
+          xcodebuild -version
+          python3 scripts/validate-package.py
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+          fi
+          xcodegen --version
+      - name: Compile and run API and native UI tests
+        run: bash scripts/build-ios.sh test
+      - name: Archive unsigned device IPA
+        run: bash scripts/build-ios.sh archive
+      - name: Export native screen previews
+        if: always()
+        run: |
+          if [[ -d build/CoreTests.xcresult ]]; then
+            xcrun xcresulttool export attachments --path build/CoreTests.xcresult --output-path build/TestAttachments
+          fi
+      - name: Save native screen previews
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: DevilkingMP-native-previews
+          path: build/TestAttachments
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Save IPA and verification receipt
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: DevilkingMP-iOS16.1-unsigned
+          path: |
+            build/DevilkingMP-unsigned.ipa
+            build/package-validation.json
+            build/build-receipt.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Save test results and build logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: DevilkingMP-verification
+          path: |
+            build/CoreTests.xcresult
+            build/test.log
+            build/archive.log
+          if-no-files-found: warn
+          retention-days: 14
