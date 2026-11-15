@@ -14,12 +14,15 @@ final class UITests: XCTestCase {
 
     func testEveryTabRendersSyntheticDataAndRespectsStatusBar() throws {
         let app = launchFixture()
-        let tabs = [("01-dashboard", "仪表盘"), ("02-downloaders", "下载器"), ("03-discovery", "发现"), ("04-subscriptions", "订阅"), ("05-settings", "设置")]
-        for (name, label) in tabs {
+        let tabs = [("01-dashboard", "仪表盘", "rem"), ("02-downloaders", "下载器", "emilia"), ("03-discovery", "发现", "ram"), ("04-subscriptions", "订阅", "beatrice"), ("05-settings", "设置", "echidna")]
+        for (name, label, character) in tabs {
             let button = app.tabBars.buttons[label]
             XCTAssertTrue(button.waitForExistence(timeout: 5))
             button.tap()
             XCTAssertTrue(app.navigationBars[label].waitForExistence(timeout: 5))
+            let header = app.descendants(matching: .any).matching(identifier: "character.header." + character).firstMatch
+            XCTAssertTrue(header.waitForExistence(timeout: 5))
+            XCTAssertGreaterThan(header.frame.height, 100, "The character needs a reserved region outside controls and posters")
             assertButtonsBelowStatusBar(app)
             try attachRenderedScreenshot(app, name: name)
         }
@@ -213,6 +216,9 @@ final class UITests: XCTestCase {
 
     func testCharacterBackgroundTogglePreservesForegroundPostersAndControls() throws {
         let app = launchFixture()
+        let header = app.descendants(matching: .any).matching(identifier: "character.header.rem").firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(header.frame.height, 100)
         let enabledDashboard = app.screenshot()
         app.tabBars.buttons["发现"].tap()
         let poster = app.buttons["discovery.media.990001"]
@@ -232,6 +238,7 @@ final class UITests: XCTestCase {
         app.tabBars.buttons["仪表盘"].tap()
         XCTAssertTrue(app.buttons["dashboard.refresh"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["dashboard.refresh"].isEnabled)
+        XCTAssertFalse(header.exists, "Turning backgrounds off must also remove the reserved character area")
         let disabledDashboard = app.screenshot()
         XCTAssertGreaterThan(changedPixelFraction(enabledDashboard, disabledDashboard), 0.005,
                              "Turning off character backgrounds must visibly remove the decorative layer")

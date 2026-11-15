@@ -53,6 +53,7 @@ struct MoviePilotView: View {
         GeometryReader { geometry in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 24) {
+                    DKCharacterHeader()
                     if !model.isConfigured(.moviepilot) {
                         DKCard { DKEmptyState(symbol: "sparkles.tv", title: "连接 MoviePilot", detail: "在设置中添加家庭 MoviePilot，即可发现影视、搜索资料并订阅想看的作品。") }
                     } else {

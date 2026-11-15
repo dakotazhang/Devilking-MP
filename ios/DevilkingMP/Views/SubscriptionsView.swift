@@ -16,6 +16,7 @@ struct SubscriptionsView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
+                    DKCharacterHeader()
                     if !model.isConfigured(.moviepilot) {
                         DKCard { DKEmptyState(symbol: "bookmark", title: "连接后查看订阅", detail: "在设置中连接 MoviePilot，已订阅的电影和剧集会出现在这里。") }
                     } else {

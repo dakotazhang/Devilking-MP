@@ -73,6 +73,7 @@ struct DownloadersView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
+                    DKCharacterHeader()
                     controls
                     downloaderPicker
                     if model.readOnlyMode { readOnlyNotice }

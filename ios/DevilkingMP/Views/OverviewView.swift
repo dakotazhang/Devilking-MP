@@ -22,6 +22,7 @@ struct OverviewView: View {
                 let aggregate = DashboardAggregate(configured: configuredKinds, snapshots: model.dashboardSnapshots, now: context.date)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
+                        DKCharacterHeader()
                         refreshHeader
                         if configuredKinds.isEmpty {
                             firstRun

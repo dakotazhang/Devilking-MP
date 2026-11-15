@@ -15,6 +15,7 @@ struct SettingsView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
+                    DKCharacterHeader()
                     accountHeader
                     resources
                     appearance
