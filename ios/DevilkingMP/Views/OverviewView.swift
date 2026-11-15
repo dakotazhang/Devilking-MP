@@ -5,6 +5,7 @@ struct OverviewView: View {
     @EnvironmentObject private var preferences: AppPreferences
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var isVisible=false
     let openSettings: () -> Void
     var openDownloaders: (ServiceKind?, DashboardTaskFilter) -> Void = { _, _ in }
 
@@ -47,20 +48,21 @@ struct OverviewView: View {
             .navigationBarTitleDisplayMode(.inline)
             .dkScreen()
             .task(id: refreshScheduleID) {
-                guard scenePhase == .active && !model.locked else{return}
+                guard isVisible && scenePhase == .active && !model.locked else{return}
                 await model.refreshDashboard(manual:false)
                 guard preferences.refreshInterval > 0 else{return}
-                while !Task.isCancelled && scenePhase == .active && !model.locked {
+                while !Task.isCancelled && isVisible && scenePhase == .active && !model.locked {
                     do { try await Task.sleep(nanoseconds:UInt64(preferences.refreshInterval)*1_000_000_000) } catch { return }
                     guard !Task.isCancelled else{return}
                     await model.refreshDashboard(manual:false)
                 }
             }
-            .onDisappear { model.cancelDashboardRefresh() }
+            .onAppear { isVisible=true }
+            .onDisappear { isVisible=false;model.cancelDashboardRefresh() }
         }
     }
 
-    private var refreshScheduleID:String { "\(preferences.refreshInterval)-\(scenePhase == .active)-\(model.locked)" }
+    private var refreshScheduleID:String { "\(preferences.refreshInterval)-\(scenePhase == .active)-\(model.locked)-\(isVisible)" }
 
     private var refreshHeader: some View {
         ViewThatFits(in: .horizontal) {

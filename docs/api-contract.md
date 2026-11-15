@@ -1,6 +1,6 @@
 # MoviePilot API contract
 
-This document describes the MoviePilot API conventions used by the 1.1.0 redesign branch. Discovery, identity lookup and season contracts were checked against current backend source and authenticated read-only responses on 2026-11-15. Live subscription creation was not exercised. Build, fixture and physical-device results are recorded separately; this branch is undergoing private testing and has not been publicly released.
+This document describes the MoviePilot API conventions used by the 1.2 feature branch. Discovery, identity lookup, season selection and resource endpoints were checked against backend source and authenticated read-only responses on 2026-11-15. Live subscription creation and resource download submission were not exercised. Build, fixture and physical-device results are recorded separately. [1.1.0](https://github.com/dakotazhang/Devilking-MP/releases/tag/v1.1.0) is the previously published version.
 
 Use authenticated read-only requests when checking a new deployment. Do not trigger downloads, site refreshes or scheduler jobs as connection tests.
 
@@ -28,6 +28,13 @@ Use authenticated read-only requests when checking a new deployment. Do not trig
 | TV season selection | GET `/api/v1/media/seasons?media_source=...&media_id=...&type_name=电视剧` | Season objects including `season_number` |
 | Existing subscription | GET `/api/v1/subscribe/media/{media_id}?media_source=...` | Subscription or an empty subscription object with null `id` |
 | Create one subscription | POST `/api/v1/subscribe/` | Success envelope with `data.id`; a live server may return an existing identity |
+| Connected search sites | GET `/api/v1/site/?page=1&count=200` | Enabled site identities; discard credentials and restricted links |
+| Enabled downloaders | GET `/api/v1/download/clients` | Downloader names and types |
+| Downloader identity for explicit mapping | GET `/api/v1/system/settings/describe/Downloaders?include_value=true&show_secrets=false` | Enabled downloader configuration; retain only name, type and sanitized endpoint identity |
+| Preset download directories | GET `/api/v1/download/paths` | Names, save paths and storage types |
+| Explicit tracker title search | GET `/api/v1/search/title?keyword=...&sites=...&page=0` | Resource contexts containing `media_info` and `torrent_info` |
+| Selected-media tracker search | GET `/api/v1/search/media/{media_id}?media_source=...&mtype=...&area=title&sites=...` | Resource contexts; add the explicitly selected TV `season` |
+| Submit one resource download | POST `/api/v1/download/` | Success envelope with `data.download_id`; acceptance is not completion |
 
 `/api/v1/search/title` searches tracker resources; it is not the metadata search endpoint. POST `/api/v1/site/userdata/{id}` requests a site refresh and must not be used for routine dashboard polling. Reading cached account data does not itself require a new tracker or site login.
 
@@ -88,7 +95,7 @@ Missing fields remain unknown. Empty `err_msg` alone is insufficient evidence of
 
 The application reads four bounded recommendation sections: Douban showing, movies, TV and animation. A failed section keeps an explicit error while other successful sections remain usable. An empty or malformed response is not fabricated into a populated recommendation list. A source with known animation classification can mark its items as animation without inventing title or rating data.
 
-Search requests use `type=media`. They do not call tracker-resource search routes. Detail responses must retain the selected source, native ID and media type; mismatches fail rather than silently changing the selection.
+Metadata searches use `type=media` and do not call tracker-resource routes. The separate PT resources mode requires an explicit site selection and search action. Detail responses must retain the selected source, native ID and media type; mismatches fail rather than silently changing the selection.
 
 Canonical source values include `themoviedb` and `douban`. The backend accepts the legacy alias `tmdb`, but the application canonicalizes it. Source and ID form a pair; optional `tmdb_id` and `douban_id` must not be interchanged. Regular media endpoints return the Chinese type values `电影` and `电视剧`; the separate `/recommend/agent` projection can return `movie` and `tv`. Convert types deliberately before a create request.
 
@@ -116,6 +123,38 @@ The existing-subscription route accepts `season` plus optional `mtype`, `title` 
 Before sending, persist a local intent keyed by the service/account and canonical media/season identity. Failed persistence blocks the POST. A network failure, malformed acknowledgement, business `success=false` or unconfirmed readback never automatically replays it, including after relaunch. Fresh read-only lookup may resolve a pending intent. Read back the exact subscription after acknowledgement before displaying verified success.
 
 The persistent intent contains an identity hash, timestamp and optional confirmed subscription ID; it must not contain credentials, full service URLs or restricted links. Corrupt ledger data fails closed and is retained for review.
+
+## Explicit PT resource search and download
+
+Resource search is separate from metadata discovery and default-rule subscription. It runs only after the user chooses connected, enabled sites. Typing, opening a result, dashboard refreshes and refresh-frequency changes do not run tracker searches. The app reads the requested response directly and does not reuse the shared `/search/last` cache. Returned site identities must belong to the selected set.
+
+Display the resource title, site, size, available seeder/peer counts and any known promotion or H&R information. Missing values remain unknown. A displayed Free flag does not guarantee that the download finishes before its deadline; actual traffic accounting and H&R follow the site's rules.
+
+For an explicit download, use the chosen resource context:
+
+```json
+{
+  "media_in": { "...": "selected media context" },
+  "torrent_in": { "...": "selected torrent context" },
+  "downloader": "the explicitly selected MP downloader name"
+}
+```
+
+Omit `save_path` to retain MoviePilot's own default; include it only for an explicitly selected current preset. Each deployment supplies its own directories. Preset choices are device-local, scoped to the MP connection and revalidated against current configuration. The app does not edit server defaults.
+
+Map each MP downloader explicitly to the same downloader configured in the app. Only compatible qBittorrent or Transmission roles are offered. Hostnames may differ between MP's container network and the phone, so names or endpoint aliases must not infer authorization. A mapping includes the current MP downloader identity and expires when that identity or the local connection changes.
+
+Submission requires current MoviePilot and mapped-target permissions, the global read-only lock to be off and any migration protection to permit the target. Revalidate the selected site, downloader and preset after confirmation, then persist the download intent before the single POST. A stale result or changed connection cannot submit. The intent stores hashes, a timestamp and an optional accepted download ID, never raw resource responses or restricted URLs.
+
+`success=true` plus `download_id` means MoviePilot accepted the task. It does not prove completion, tracker acceptance, freeleech eligibility or contractual seeding. A timeout, business failure or unknown acknowledgement never triggers automatic resubmission, including after relaunch or after selecting another downloader or directory for the same resource. Check the original service read-only before any further action.
+
+## Foreground refresh and presentation
+
+The device preference offers off, 15, 30, 60 or 120 seconds, defaulting to 60 seconds. The dashboard and currently visible downloader page refresh only in the foreground; entering a page and manual refresh remain available when timed updates are off. Recommendations and PT resource searches are never repeated by this timer. Concurrent dashboard refresh requests share the active cycle instead of starting overlapping reads. Background refresh state is separate from the visible manual-refresh indicator.
+
+Routine dashboard, task-list and discovery reads have a 22-second operation budget including authentication and auxiliary requests. Explicit site searches use a separate 150-second budget because they contact selected sites. Cancellation or timeout releases the current operation without reporting missing data as zero and without automatically replaying business work. Discovery supports pull-to-refresh even when its content is empty or shorter than the screen.
+
+Theme, text size, dashboard module visibility and Simplified Chinese / Traditional Chinese / English interface choices are device-local. Server-supplied media titles and site content keep their original text. Presentation preferences never change server configuration, action permissions or migration protection.
 
 ## Health and version discovery
 

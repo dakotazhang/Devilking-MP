@@ -40,6 +40,8 @@ private struct SelectedDownloaderTask: Identifiable {
 
 struct DownloadersView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var preferences: AppPreferences
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Binding var selectedKind: ServiceKind?
     @Binding var filter: DashboardTaskFilter
@@ -50,6 +52,7 @@ struct DownloadersView: View {
     @State private var lastRead: [ServiceKind: Date] = [:]
     @State private var readErrors: [ServiceKind: String] = [:]
     @State private var displayNow = Date()
+    @State private var isVisible=false
     private let kinds: [ServiceKind] = [.qb1, .qb2, .tr]
     private var refreshing: Bool { refreshRequests > 0 }
 
@@ -129,7 +132,18 @@ struct DownloadersView: View {
             .navigationTitle("下载器")
             .navigationBarTitleDisplayMode(.inline)
             .refreshable { await reload() }
-            .task(id: selectedKind) { await reload() }
+            .task(id: refreshScheduleID) {
+                guard isVisible && scenePhase == .active && !model.locked else{return}
+                await reload()
+                guard preferences.refreshInterval > 0 else{return}
+                while !Task.isCancelled && isVisible && scenePhase == .active && !model.locked {
+                    do { try await Task.sleep(nanoseconds:UInt64(preferences.refreshInterval)*1_000_000_000) } catch {return}
+                    guard !Task.isCancelled else{return}
+                    await reload()
+                }
+            }
+            .onAppear { isVisible=true }
+            .onDisappear { isVisible=false }
             .task {
                 while !Task.isCancelled {
                     do { try await Task.sleep(nanoseconds: 15_000_000_000) } catch { return }
@@ -183,7 +197,7 @@ struct DownloadersView: View {
     }
     private func downloaderChoice(_ kind: ServiceKind?, title: String) -> some View {
         Button { selectedKind = kind } label: {
-            Text(title).font(.subheadline.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 44)
+            Text(LocalizedStringKey(title)).font(.subheadline.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 44)
                 .foregroundStyle(selectedKind == kind ? DKTheme.background : DKTheme.muted)
                 .background(selectedKind == kind ? DKTheme.accent : DKTheme.card, in: Capsule())
         }.buttonStyle(.plain).accessibilityIdentifier("downloaders.service.\(kind?.rawValue ?? "all")")
@@ -219,7 +233,7 @@ struct DownloadersView: View {
             HStack(spacing: 8) {
                 ForEach(DashboardTaskFilter.allCases) { item in
                     Button { filter = item } label: {
-                        Text(item.shortTitle).font(.subheadline.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 44)
+                        Text(LocalizedStringKey(item.shortTitle)).font(.subheadline.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 44)
                             .foregroundStyle(filter == item ? DKTheme.background : DKTheme.muted)
                             .background(filter == item ? DKTheme.accent : DKTheme.card, in: Capsule())
                     }.buttonStyle(.plain).accessibilityIdentifier("downloaders.filter.\(item.rawValue)")
@@ -229,20 +243,29 @@ struct DownloadersView: View {
         }
     }
     private func reload() async {
-        guard !model.locked && !Task.isCancelled else { return }
+        guard !refreshing && !model.locked && !Task.isCancelled else { return }
         let requestedKinds = activeKinds
         guard !requestedKinds.isEmpty else { return }
         refreshRequests += 1
         defer { refreshRequests -= 1 }
-        await model.refreshDashboard()
-        for kind in requestedKinds {
-            guard !Task.isCancelled && !model.locked else { return }
-            if await model.loadTasks(kind) {
-                let completedAt = Date()
-                lastRead[kind] = completedAt; displayNow = completedAt; readErrors[kind] = nil
-            } else { readErrors[kind] = "接口读取未完成，请检查连接并稍后刷新。" }
+        async let dashboard:Void=model.refreshDashboard(manual:false)
+        let sharedModel=model
+        await withTaskGroup(of:(ServiceKind,Bool).self) { group in
+            for kind in requestedKinds {
+                group.addTask { (kind,await sharedModel.loadTasks(kind)) }
+            }
+            for await (kind,success) in group {
+                guard !Task.isCancelled && !model.locked else {continue}
+                if success {
+                    let completedAt=Date()
+                    lastRead[kind]=completedAt;displayNow=completedAt;readErrors[kind]=nil
+                } else {readErrors[kind]="接口读取未完成，请检查连接并稍后刷新。"}
+            }
         }
+        await dashboard
     }
+
+    private var refreshScheduleID:String { "\(selectedKind?.rawValue ?? "all")-\(preferences.refreshInterval)-\(scenePhase == .active)-\(model.locked)-\(isVisible)" }
 
     private func taskDataIsCurrent(_ kind: ServiceKind) -> Bool {
         guard readErrors[kind] == nil, let read = lastRead[kind] else { return false }

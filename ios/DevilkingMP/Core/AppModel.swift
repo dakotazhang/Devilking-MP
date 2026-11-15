@@ -195,7 +195,9 @@ import LocalAuthentication
         #endif
         let key="tasks-"+kind.rawValue;guard !locked && !inflight.contains(key) else{return false};inflight.insert(key);busy=true;defer{inflight.remove(key);busy = !inflight.isEmpty};let g=generation
         do {
-            let rows=try await client(kind).tasks();guard g == generation && !locked else{return false};tasks.removeAll{$0.kind == kind};tasks.append(contentsOf:rows)
+            let api=try client(kind)
+            let rows=try await ReadBudget.run(seconds:readBudgetSeconds) { try await api.tasks() }
+            guard g == generation && !locked && !Task.isCancelled else{return false};tasks.removeAll{$0.kind == kind};tasks.append(contentsOf:rows)
             if var s=snapshots[kind] { s.taskCount=rows.count;s.updatedAt=Date();snapshots[kind]=s }
             return true
         } catch {if g == generation{clients[kind]=nil;message=Self.safeError(error)};return false}
