@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import ImageIO
 
 enum DKTheme {
     private static func adaptive(light: UIColor, dark: UIColor) -> Color {
@@ -122,59 +123,100 @@ struct DKInfoRow: View {
 
 struct DKPoster: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.scenePhase) private var scenePhase
     let url: String?
     var width: CGFloat = 64
     var height: CGFloat = 92
-    @State private var authenticatedImage: UIImage?
+    var allowRetry = false
+    @State private var posterImage: UIImage?
+    @State private var failed = false
+    @State private var retryToken = UUID()
+    @State private var forceNextReload = false
 
     var body: some View {
         content
             .frame(width: width, height: height)
             .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .accessibilityHidden(true)
-            .task(id: loadKey) { await loadAuthenticatedPoster() }
+            .accessibilityHidden(!allowRetry && !uiFixtureActive)
+            .accessibilityLabel(Text(LocalizedStringKey(uiFixtureActive ? (posterImage == nil ? "合成海报占位" : "合成海报已载入") : "海报")))
+            .task(id: loadKey) { await loadArtwork() }
     }
 
     @ViewBuilder private var content: some View {
-        if url?.hasPrefix("dkemby:") == true {
-            if let authenticatedImage {
-                Image(uiImage: authenticatedImage).resizable().scaledToFill()
-            } else {
-                placeholder
-            }
+        if let posterImage {
+            Image(uiImage: posterImage).resizable().scaledToFill()
         } else {
-            publicPoster
-        }
-    }
-
-    private var publicPoster: some View {
-        AsyncImage(url: url.flatMap(URL.init(string:))) { phase in
-            if let image = phase.image {
-                image.resizable().scaledToFill()
-            } else {
-                placeholder
-            }
+            placeholder
         }
     }
 
     private var placeholder: some View {
         ZStack {
             LinearGradient(colors: [DKTheme.accent.opacity(0.18), DKTheme.card], startPoint: .topLeading, endPoint: .bottomTrailing)
-            Image(systemName: "film").font(.title2).foregroundStyle(DKTheme.accent.opacity(0.65))
+            VStack(spacing: 8) {
+                Image(systemName: "film").font(.title2).foregroundStyle(DKTheme.accent.opacity(0.65))
+                if failed && allowRetry {
+                    Button {
+                        forceNextReload = true
+                        retryToken = UUID()
+                    } label: {
+                        Label("重试海报", systemImage: "arrow.clockwise").font(.caption2)
+                    }.buttonStyle(.bordered).accessibilityIdentifier("poster.retry")
+                }
+            }
         }
     }
 
     private var loadKey: String {
-        "\(url ?? "")|\(model.locked)|\(model.profile(.emby).baseURL)"
+        "\(url?.hashValue ?? 0)|\(model.locked)|\(model.mpArtworkRefreshToken)|\(scenePhase == .active)|\(retryToken)"
     }
 
-    private func loadAuthenticatedPoster() async {
-        authenticatedImage = nil
-        guard !model.locked, let url, url.hasPrefix("dkemby:") else { return }
-        let id = String(url.dropFirst("dkemby:".count))
-        guard !id.isEmpty, let data = await model.loadPoster(id), !Task.isCancelled, !model.locked else { return }
-        authenticatedImage = UIImage(data: data)
+    private var uiFixtureActive: Bool {
+        #if DEBUG
+        return model.uiFixtureMode
+        #else
+        return false
+        #endif
+    }
+
+    private func loadArtwork() async {
+        let forceReload = forceNextReload
+        forceNextReload = false
+        posterImage = nil
+        failed = false
+        guard !model.locked, scenePhase == .active, let url, !url.isEmpty else { return }
+        let data: Data?
+        if url.hasPrefix("dkemby:") {
+            let id = String(url.dropFirst("dkemby:".count))
+            if id.isEmpty { data = nil }
+            else { data = await model.loadPoster(id) }
+        } else {
+            // MP's own image proxy handles source anti-hotlink requirements.
+            // Credentials never get attached to an external artwork request here.
+            data = await model.loadMPArtwork(url, forceReload: forceReload)
+        }
+        guard !Task.isCancelled, !model.locked, scenePhase == .active else { return }
+        if let data, let image = Self.thumbnail(data, width: width, height: height) {
+            posterImage = image
+        } else {
+            failed = true
+        }
+    }
+
+    /// Decode only the displayed pixel size. Full-resolution posters are not
+    /// repeatedly decoded as the user scrolls through a recommendation grid.
+    private static func thumbnail(_ data: Data, width: CGFloat, height: CGFloat) -> UIImage? {
+        let scale = UIScreen.main.scale
+        let pixels = min(1200, max(64, Int(max(width, height) * scale)))
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: pixels,
+                kCGImageSourceShouldCacheImmediately: true
+              ] as CFDictionary) else { return nil }
+        return UIImage(cgImage: image, scale: scale, orientation: .up)
     }
 }
 
@@ -211,8 +253,10 @@ struct DKProtectionNotice: View {
 }
 
 struct DKScreenBackground: ViewModifier {
+    @Environment(\.dkPageCharacter) private var character
     func body(content: Content) -> some View {
-        content.background(DKTheme.background).toolbarBackground(DKTheme.background, for: .navigationBar)
+        content.background { DKCharacterBackdrop(character: character) }
+            .toolbarBackground(DKTheme.background, for: .navigationBar)
     }
 }
 

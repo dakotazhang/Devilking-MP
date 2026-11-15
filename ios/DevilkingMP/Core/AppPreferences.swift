@@ -59,6 +59,7 @@ enum DashboardModule: String, CaseIterable, Identifiable {
     @Published var theme: AppTheme { didSet { defaults.set(theme.rawValue, forKey: "ui.theme") } }
     @Published var language: AppLanguage { didSet { defaults.set(language.rawValue, forKey: "ui.language") } }
     @Published var fontSize: AppFontSize { didSet { defaults.set(fontSize.rawValue, forKey: "ui.fontSize") } }
+    @Published var characterBackgroundsEnabled: Bool { didSet { defaults.set(characterBackgroundsEnabled, forKey: "ui.characterBackgroundsEnabled") } }
     @Published var visibleDashboardModules: Set<DashboardModule> {
         didSet { defaults.set(visibleDashboardModules.map(\.rawValue).sorted(), forKey: "ui.dashboardModules") }
     }
@@ -72,6 +73,7 @@ enum DashboardModule: String, CaseIterable, Identifiable {
         theme = AppTheme(rawValue: defaults.string(forKey: "ui.theme") ?? "") ?? .system
         language = AppLanguage(rawValue: defaults.string(forKey: "ui.language") ?? "") ?? .simplifiedChinese
         fontSize = AppFontSize(rawValue: defaults.string(forKey: "ui.fontSize") ?? "") ?? .system
+        characterBackgroundsEnabled = defaults.object(forKey: "ui.characterBackgroundsEnabled") == nil ? true : defaults.bool(forKey: "ui.characterBackgroundsEnabled")
         if let saved = defaults.stringArray(forKey: "ui.dashboardModules") {
             visibleDashboardModules = Set(saved.compactMap(DashboardModule.init(rawValue:)))
         } else { visibleDashboardModules = Set(DashboardModule.allCases) }

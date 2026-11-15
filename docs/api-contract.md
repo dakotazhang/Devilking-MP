@@ -1,6 +1,6 @@
 # MoviePilot API contract
 
-This document describes the MoviePilot API conventions used by the 1.2 feature branch. Discovery, identity lookup, season selection and resource endpoints were checked against backend source and authenticated read-only responses on 2026-11-15. Live subscription creation and resource download submission were not exercised. Build, fixture and physical-device results are recorded separately. [1.1.0](https://github.com/dakotazhang/Devilking-MP/releases/tag/v1.1.0) is the previously published version.
+This document describes the MoviePilot API conventions used by the 1.3 feature branch. Discovery, identity lookup, season selection and resource endpoints were checked against backend source and authenticated read-only responses on 2026-11-15. Live subscription creation and resource download submission were not exercised. Build, fixture and physical-device results are recorded separately. [1.1.0](https://github.com/dakotazhang/Devilking-MP/releases/tag/v1.1.0) is a previously published version.
 
 Use authenticated read-only requests when checking a new deployment. Do not trigger downloads, site refreshes or scheduler jobs as connection tests.
 
@@ -23,7 +23,10 @@ Use authenticated read-only requests when checking a new deployment. Do not trig
 | Cached account statistics | GET `/api/v1/site/userdata/latest` | Latest cached SiteUserData records |
 | Site configuration | GET `/api/v1/site/` | Configuration containing sensitive fields; not account totals |
 | Metadata title search | GET `/api/v1/media/search?title=...&type=media&page=1&count=20` | Media metadata |
-| Recommendation sections | GET `/api/v1/recommend/douban_showing`, `/douban_movies`, `/douban_tvs`, `/douban_tv_animation` | Media lists, bounded `page` and `count` |
+| User recommendation selection | GET `/api/v1/user/config/Recommend` | Current enabled recommendation section names |
+| Recommendation and media providers | GET `/api/v1/recommend/source`, `/api/v1/media/source` | Extension section declarations and available media sources |
+| Configured built-in recommendation sections | GET supported `/api/v1/recommend/...` and `/api/v1/anilist/...` routes | Media lists, bounded `page` and `count` |
+| MoviePilot poster image | GET `/api/v1/system/cache/image?url=...` | Authenticated image response for a validated public artwork reference |
 | Native media detail | GET `/api/v1/media/{media_id}?media_source=...&type_name=...` | One media object |
 | TV season selection | GET `/api/v1/media/seasons?media_source=...&media_id=...&type_name=电视剧` | Season objects including `season_number` |
 | Existing subscription | GET `/api/v1/subscribe/media/{media_id}?media_source=...` | Subscription or an empty subscription object with null `id` |
@@ -93,7 +96,7 @@ Missing fields remain unknown. Empty `err_msg` alone is insufficient evidence of
 
 ## Discovery and subscription creation
 
-The application reads four bounded recommendation sections: Douban showing, movies, TV and animation. A failed section keeps an explicit error while other successful sections remain usable. An empty or malformed response is not fabricated into a populated recommendation list. A source with known animation classification can mark its items as animation without inventing title or rating data.
+The application follows the current MoviePilot user's recommendation selection and available media providers. It supports fifteen built-in sections across TMDB, Douban, Bangumi and AniList, retaining their catalog order and bounding each list to twelve items. Supported extension declarations may select a known route; an unknown extension is shown with a link-back explanation and is never executed as arbitrary plugin code. A failed section keeps an explicit error while other successful sections remain usable. An empty or malformed response is not fabricated into a populated recommendation list. A source with known animation classification can mark its items as animation without inventing title or rating data.
 
 Metadata searches use `type=media` and do not call tracker-resource routes. The separate PT resources mode requires an explicit site selection and search action. Detail responses must retain the selected source, native ID and media type; mismatches fail rather than silently changing the selection.
 
@@ -124,6 +127,10 @@ Before sending, persist a local intent keyed by the service/account and canonica
 
 The persistent intent contains an identity hash, timestamp and optional confirmed subscription ID; it must not contain credentials, full service URLs or restricted links. Corrupt ledger data fails closed and is retained for review.
 
+## Poster images
+
+MoviePilot discovery and subscription posters use the connected MP's authenticated image-cache route. The client extracts validated public HTTPS artwork references from supported MP wrapper URLs, discards browser resource tokens and sends its own current authentication header only to its configured MP origin. It does not send service credentials to an external image host. Validate the image MIME type, file signature and 8 MiB size bound before rendering; invalid responses retain a placeholder with an explicit Retry poster action. These poster requests are separate from bundled character backgrounds and never submit subscriptions or downloads.
+
 ## Explicit PT resource search and download
 
 Resource search is separate from metadata discovery and default-rule subscription. It runs only after the user chooses connected, enabled sites. Typing, opening a result, dashboard refreshes and refresh-frequency changes do not run tracker searches. The app reads the requested response directly and does not reuse the shared `/search/last` cache. Returned site identities must belong to the selected set.
@@ -142,7 +149,7 @@ For an explicit download, use the chosen resource context:
 
 Omit `save_path` to retain MoviePilot's own default; include it only for an explicitly selected current preset. Each deployment supplies its own directories. Preset choices are device-local, scoped to the MP connection and revalidated against current configuration. The app does not edit server defaults.
 
-Map each MP downloader explicitly to the same downloader configured in the app. Only compatible qBittorrent or Transmission roles are offered. Hostnames may differ between MP's container network and the phone, so names or endpoint aliases must not infer authorization. A mapping includes the current MP downloader identity and expires when that identity or the local connection changes.
+The user-facing “Confirm downloader identity” page explains which MP downloader is the same instance as a connection in the app. For example, an MP “Main downloader” may be the same instance as the app's “Home qB1”; the user must verify that fact rather than relying on matching names. Only compatible qBittorrent or Transmission roles are offered. Hostnames may differ between MP's container network and the phone, so names or endpoint aliases must not infer authorization. A mapping includes the current MP downloader identity and expires when that identity or the local connection changes. Confirming identity is a local preference change, not a download submission.
 
 Submission requires current MoviePilot and mapped-target permissions, the global read-only lock to be off and any migration protection to permit the target. Revalidate the selected site, downloader and preset after confirmation, then persist the download intent before the single POST. A stale result or changed connection cannot submit. The intent stores hashes, a timestamp and an optional accepted download ID, never raw resource responses or restricted URLs.
 
@@ -155,6 +162,8 @@ The device preference offers off, 15, 30, 60 or 120 seconds, defaulting to 60 se
 Routine dashboard, task-list and discovery reads have a 22-second operation budget including authentication and auxiliary requests. Explicit site searches use a separate 150-second budget because they contact selected sites. Cancellation or timeout releases the current operation without reporting missing data as zero and without automatically replaying business work. Discovery supports pull-to-refresh even when its content is empty or shorter than the screen.
 
 Theme, text size, dashboard module visibility and Simplified Chinese / US English interface choices are device-local. English uses the `en_US` locale. Server-supplied media titles and site content keep their original text. Presentation preferences never change server configuration, action permissions or migration protection.
+
+Character backgrounds are bundled presentation assets and enabled by default. Their device-local toggle persists across launches without changing other preferences. The five tab themes are Rem, Emilia, Ram, Beatrice and Echidna in navigation order. The system's Reduce Transparency preference suppresses decorative backgrounds; neither mode performs artwork network requests.
 
 ## Health and version discovery
 

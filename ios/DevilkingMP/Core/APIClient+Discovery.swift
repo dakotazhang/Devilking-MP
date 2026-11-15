@@ -5,27 +5,31 @@ extension APIClient {
     /// Bounded metadata reads. This does not search tracker resources or enqueue downloads.
     func discoverySections() async throws -> [MPDiscoverySection] {
         guard profile.kind == .moviepilot else { throw AppError.message("此服务不提供影视发现。") }
-        let sources: [(String, String, String, MPBrowseCategory, String)] = [
-            ("douban_showing", "豆瓣正在热映", "正在上映的新作品", .movie, "电影"),
-            ("douban_movies", "豆瓣电影", "发现下一部想看的电影", .movie, "电影"),
-            ("douban_tvs", "豆瓣剧集", "随时选择下一部追剧", .tv, "电视剧"),
-            ("douban_tv_animation", "豆瓣动画", "动画与番剧推荐", .anime, "电视剧")
-        ]
-        // Authenticate once before concurrent reads. A slow recommendation
-        // provider must not serialize four entire request timeouts.
         try await prepareReadSession()
+        let sources=try await ReadBudget.run(seconds:6) {
+            async let configuration=self.get("/api/v1/user/config/Recommend",timeout:5)
+            async let extensions=self.get("/api/v1/recommend/source",timeout:5)
+            async let providers=self.get("/api/v1/media/source",timeout:5)
+            let (rawConfiguration,rawExtensions,rawProviders)=try await (configuration,extensions,providers)
+            guard let configured=rawConfiguration as? [String:Any],let extra=rawExtensions as? [[String:Any]],let available=rawProviders as? [[String:Any]],extra.count <= 100,available.count <= 100 else { throw AppError.message("MoviePilot 推荐栏目来源不完整。") }
+            return try MPRecommendationCatalog.configured(configured,extensions:extra,providers:available)
+        }
         let sections = await withTaskGroup(of: (Int, MPDiscoverySection).self) { group in
             for (index, entry) in sources.enumerated() {
                 group.addTask {
-                    let (source, title, subtitle, category, type)=entry
+                    guard let path=entry.path else {
+                        return (index,MPDiscoverySection(id:entry.id,title:entry.title,subtitle:"MoviePilot 扩展栏目",category:entry.category,items:[],error:"此扩展栏目请在 MoviePilot 原页面查看。"))
+                    }
                     do {
-                        let value=try await self.get("/api/v1/recommend/"+source,query:["page":"1","count":"12"])
+                        var query=entry.query;query["page"]="1";query["count"]="12"
+                        let parameters=query
+                        let value=try await ReadBudget.run(seconds:12) { try await self.get(path,query:parameters,timeout:10) }
                         let rows=try Self.discoveryRows(value)
-                        var items=try Self.discoveryItems(rows,defaultSource:"douban",defaultType:type)
-                        if category == .anime { items=items.map { var item=$0;item.isAnime=true;return item } }
-                        return (index,MPDiscoverySection(id:source,title:title,subtitle:subtitle,category:category,items:items))
+                        var items=try Self.discoveryItems(rows,defaultSource:entry.mediaSource,defaultType:entry.defaultType)
+                        if entry.category == .anime { items=items.map { var item=$0;item.isAnime=true;return item } }
+                        return (index,MPDiscoverySection(id:entry.id,title:entry.title,subtitle:"跟随 MoviePilot 当前推荐栏目",category:entry.category,items:items))
                     } catch {
-                        return (index,MPDiscoverySection(id:source,title:title,subtitle:subtitle,category:category,items:[],error:Self.discoveryError(error)))
+                        return (index,MPDiscoverySection(id:entry.id,title:entry.title,subtitle:"跟随 MoviePilot 当前推荐栏目",category:entry.category,items:[],error:Self.discoveryError(error)))
                     }
                 }
             }

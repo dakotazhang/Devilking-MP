@@ -66,7 +66,7 @@ private struct MPSubscriptionCard: View {
     var body: some View {
         DKCard {
             HStack(alignment: .top, spacing: 14) {
-                DKPoster(url: subscription.poster, width: 68, height: 100)
+                DKPoster(url: subscription.poster, width: 68, height: 100, allowRetry: true)
                 VStack(alignment: .leading, spacing: 9) {
                     Text(subscription.title).font(.headline).lineLimit(2)
                         .accessibilityIdentifier("subscription.title." + subscription.id)
@@ -91,6 +91,7 @@ private struct MPSubscriptionCard: View {
                     .accessibilityIdentifier("subscription.action." + subscription.id)
             }
         }
+        .onChange(of: model.interactionEpoch) { _ in confirming = false }
         .alert(paused ? "恢复这个订阅？" : "暂停这个订阅？", isPresented: $confirming) {
             Button("取消", role: .cancel) {}
             Button("确认") {

@@ -99,6 +99,33 @@ actor APIClient {
         loggedIn=true
     }
     func prepareReadSession() async throws { try Task.checkCancellation(); try await login() }
+    func authenticatedMoviePilotImage(_ path:String,query:[String:String]) async throws -> Data {
+        guard profile.kind == .moviepilot,path == "/api/v1/system/cache/image",query.keys.sorted() == ["url"] else { throw AppError.message("海报请求路径无效。") }
+        try Task.checkCancellation();try await login()
+        var headers=credentials.apiKey.isEmpty ? ["Authorization":"Bearer "+token]:["X-API-KEY":credentials.apiKey]
+        headers["Accept"]="image/webp,image/png,image/jpeg,image/gif,image/avif,image/*"
+        var request=URLRequest(url:try endpoint(path,query:query));request.httpMethod="GET";request.timeoutInterval=18
+        for(key,value) in headers { request.setValue(value,forHTTPHeaderField:key) }
+        let(bytes,response)=try await session.bytes(for:request)
+        defer { bytes.task.cancel() }
+        try Task.checkCancellation()
+        guard let http=response as? HTTPURLResponse else { throw AppError.message("海报响应无效。") }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            // Do not replay this image request. A later explicit retry may log
+            // in again instead of reusing an expired cached access token.
+            loggedIn=false;token=""
+        }
+        try check(http)
+        let mime=http.value(forHTTPHeaderField:"Content-Type")
+        guard MPArtworkPolicy.acceptsMIME(mime),http.expectedContentLength <= Int64(MPArtworkPolicy.maximumBytes) else { throw AppError.message("海报类型或大小不符合限制。") }
+        var data=Data()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard data.count < MPArtworkPolicy.maximumBytes else { throw AppError.message("海报超出 8 MiB 限制。") }
+            data.append(byte)
+        }
+        return try MPArtworkPolicy.validateImage(data,mime:mime)
+    }
 
     /// Preserves the success envelope and permits one bounded resource search.
     /// Mutation callers must pass both a current authorization check and a durable intent hook.
@@ -123,11 +150,11 @@ actor APIClient {
         return value
     }
     private func origin(_ u:URL)->String { var c=URLComponents();c.scheme=u.scheme;c.host=u.host;c.port=u.port;return c.string ?? "" }
-    func get(_ path:String,query:[String:String]=[:]) async throws -> Any {
+    func get(_ path:String,query:[String:String]=[:],timeout:TimeInterval?=nil) async throws -> Any {
         try await login();var headers=[String:String]()
         if profile.kind == .moviepilot { headers=credentials.apiKey.isEmpty ? ["Authorization":"Bearer "+token]:["X-API-KEY":credentials.apiKey] }
         if profile.kind == .emby { headers=["X-Emby-Token":token] }
-        let (data,response)=try await request(path,query:query,headers:headers);try check(response)
+        let (data,response)=try await request(path,query:query,headers:headers,timeout:timeout);try check(response)
         if profile.kind == .moviepilot {
             let value=try decode(data)
             if let o=value as? [String:Any], let success=o["success"] as? Bool {

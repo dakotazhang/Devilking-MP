@@ -13,6 +13,7 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertEqual(preferences.theme, .system)
         XCTAssertEqual(preferences.language, .simplifiedChinese)
         XCTAssertEqual(preferences.fontSize, .system)
+        XCTAssertTrue(preferences.characterBackgroundsEnabled)
         XCTAssertEqual(preferences.visibleDashboardModules, Set(DashboardModule.allCases))
     }
 
@@ -23,12 +24,14 @@ final class AppPreferencesTests: XCTestCase {
         first.theme = .light
         first.language = .english
         first.fontSize = .large
+        first.characterBackgroundsEnabled = false
         first.setVisible(.storage, false)
         let second = AppPreferences(defaults: defaults)
         XCTAssertEqual(second.refreshInterval, 0)
         XCTAssertEqual(second.theme, .light)
         XCTAssertEqual(second.language, .english)
         XCTAssertEqual(second.fontSize, .large)
+        XCTAssertFalse(second.characterBackgroundsEnabled)
         XCTAssertFalse(second.isVisible(.storage))
         XCTAssertTrue(second.isVisible(.traffic))
     }
@@ -62,6 +65,20 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertEqual(preferences.refreshInterval, 30)
         XCTAssertEqual(preferences.theme, .dark)
         XCTAssertTrue(defaults.bool(forKey: "readOnlyMode"))
+    }
+
+    @MainActor func testCharacterBackgroundToggleChangesOnlyLocalPresentation() {
+        let defaults = isolatedDefaults()
+        defaults.set(true, forKey: "readOnlyMode")
+        defaults.set(true, forKey: "migrationProtection")
+        let preferences = AppPreferences(defaults: defaults)
+        XCTAssertTrue(preferences.characterBackgroundsEnabled)
+        preferences.characterBackgroundsEnabled = false
+        XCTAssertFalse(AppPreferences(defaults: defaults).characterBackgroundsEnabled)
+        XCTAssertTrue(defaults.bool(forKey: "readOnlyMode"))
+        XCTAssertTrue(defaults.bool(forKey: "migrationProtection"))
+        preferences.characterBackgroundsEnabled = true
+        XCTAssertTrue(AppPreferences(defaults: defaults).characterBackgroundsEnabled)
     }
 
     @MainActor func testDirectoryPreferencesAreConnectionScopedAndRevalidated() {
@@ -120,6 +137,8 @@ final class AppPreferencesTests: XCTestCase {
         let bundle = Bundle(for: AppModel.self)
         XCTAssertEqual(AppLanguage.english.localized("设置", bundle: bundle), "Settings")
         XCTAssertEqual(AppLanguage.simplifiedChinese.localized("服务器设置", bundle: bundle), "服务器设置")
+        XCTAssertEqual(AppLanguage.english.localized("确认下载器身份", bundle: bundle), "Confirm downloader identity")
+        XCTAssertEqual(AppLanguage.english.localized("角色背景", bundle: bundle), "Character backgrounds")
         XCTAssertEqual(AppLanguage.english.localized("A server-supplied title", bundle: bundle), "A server-supplied title")
         XCTAssertEqual(AppLanguage.english.locale.identifier, "en_US")
         XCTAssertEqual(AppLanguage.english.title, "English (US)")

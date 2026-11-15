@@ -17,6 +17,7 @@ import LocalAuthentication
     @Published var discoveryError:String?
     @Published var discoveryQuery=""
     @Published var discoveryUpdatedAt:Date?
+    @Published private(set) var mpArtworkRefreshToken=UUID()
     @Published var resourceDirectoryOptions:[MPResourceDirectory]=[]
     @Published var resourceDirectoriesLoading=false
     @Published var resourceDirectoriesError:String?
@@ -51,6 +52,9 @@ import LocalAuthentication
     var uiFixtureMode=false
     #endif
     private let posterCache:NSCache<NSString,NSData> = {let c=NSCache<NSString,NSData>();c.countLimit=100;c.totalCostLimit=32*1024*1024;return c}()
+    private let mpArtworkCache:NSCache<NSString,NSData> = {let c=NSCache<NSString,NSData>();c.countLimit=80;c.totalCostLimit=16*1024*1024;return c}()
+    private let mpArtworkGate=MPArtworkReadGate(limit:4)
+    private var mpArtworkJobs:[String:(UUID,Task<Data?,Never>)]=[:]
     init(defaults:UserDefaults = .standard, credentialReader:@escaping (ServiceKind)->Credential = { KeychainStore.read($0) }, clientFactory:@escaping (ServiceProfile,Credential)->APIClient = { APIClient(profile:$0,credentials:$1) }, readBudgetSeconds:TimeInterval = 22) {
         #if DEBUG
         let defaults = ProcessInfo.processInfo.arguments.contains("--ui-fixture") ? UserDefaults(suiteName:"DevilkingMP-UITestFixture")! : defaults
@@ -207,6 +211,7 @@ import LocalAuthentication
         if uiFixtureMode { subscriptions=UITestFixtures.subscriptions();sites=UITestFixtures.sites();return true }
         #endif
         guard !locked && !inflight.contains("mp") else{return false};inflight.insert("mp");busy=true;defer{inflight.remove("mp");busy = !inflight.isEmpty};let g=generation
+        invalidateMPArtwork()
         do {
             let c=try client(.moviepilot), subs=try await c.subscriptions()
             guard g == generation && !locked else{return false}
@@ -227,6 +232,7 @@ import LocalAuthentication
     func loadDiscovery() async {
         guard !locked && !Task.isCancelled else{return}
         if let job=discoveryJob { await job.value;return }
+        invalidateMPArtwork()
         let cycle=UUID(),g=generation
         discoveryCycle=cycle;discoveryLoading=true
         let job=Task { @MainActor [weak self] in
@@ -466,9 +472,49 @@ import LocalAuthentication
         let g=generation
         do{let data=try await client(.emby).embyImage(id);guard generation == g && !locked else{return nil};posterCache.setObject(data as NSData,forKey:id as NSString,cost:data.count);return data}catch{return nil}
     }
+    func loadMPArtwork(_ reference:String,forceReload:Bool=false) async -> Data? {
+        guard !reference.isEmpty && !locked && !Task.isCancelled && isConfigured(.moviepilot) else{return nil}
+        #if DEBUG
+        if uiFixtureMode { return UITestFixtures.artwork(reference) }
+        #endif
+        let epoch=resourceConnectionEpoch,refresh=mpArtworkRefreshToken
+        let key=epoch.uuidString+"|"+reference
+        if forceReload {
+            mpArtworkCache.removeObject(forKey:key as NSString)
+            mpArtworkJobs.removeValue(forKey:key)?.1.cancel()
+        }
+        if let cached=mpArtworkCache.object(forKey:key as NSString) {return cached as Data}
+        if let job=mpArtworkJobs[key] {
+            let data=await job.1.value
+            return !Task.isCancelled && !locked && epoch == resourceConnectionEpoch && refresh == mpArtworkRefreshToken ? data:nil
+        }
+        guard let api=try? client(.moviepilot) else{return nil}
+        let id=UUID(),gate=mpArtworkGate,budget=min(18,readBudgetSeconds)
+        let job=Task { @MainActor [weak self] () -> Data? in
+            guard let self else{return nil}
+            do {
+                let data=try await ReadBudget.run(seconds:budget) {
+                    try await gate.read { try await api.moviePilotArtwork(reference) }
+                }
+                guard !Task.isCancelled && !self.locked && epoch == self.resourceConnectionEpoch && refresh == self.mpArtworkRefreshToken else{return nil}
+                self.mpArtworkCache.setObject(data as NSData,forKey:key as NSString,cost:data.count)
+                return data
+            } catch { return nil }
+        }
+        mpArtworkJobs[key]=(id,job)
+        let data=await job.value
+        if mpArtworkJobs[key]?.0 == id {mpArtworkJobs[key]=nil}
+        return !Task.isCancelled && !locked && epoch == resourceConnectionEpoch && refresh == mpArtworkRefreshToken ? data:nil
+    }
+    func invalidateMPArtwork() {
+        for entry in mpArtworkJobs.values {entry.1.cancel()}
+        mpArtworkJobs.removeAll();mpArtworkCache.removeAllObjects()
+        mpArtworkRefreshToken=UUID()
+    }
     func cancelDashboardRefresh() { dashboardJob?.cancel() }
     func cancelDiscoveryRefresh() { discoveryJob?.cancel() }
     private func resetReadJobs() {
+        invalidateMPArtwork()
         dashboardJob?.cancel();discoveryJob?.cancel()
         dashboardJob=nil;dashboardCycle=nil;discoveryJob=nil;discoveryCycle=nil
         dashboardRefreshing=false;dashboardManualRefreshing=false;discoveryLoading=false
@@ -476,6 +522,7 @@ import LocalAuthentication
     func protectOnBackground() {
         generation &+= 1;discoverySearchGeneration &+= 1
         interactionEpoch=UUID()
+        invalidateMPArtwork()
         dashboardJob?.cancel();discoveryJob?.cancel()
         if biometricEnabled { locked=true };clients=[:]
     }

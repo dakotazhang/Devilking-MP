@@ -121,7 +121,7 @@ struct SettingsView: View {
             }
             Divider()
             NavigationLink { DownloaderBindingsSettingsView() } label: {
-                Label("MP 下载器对应关系", systemImage: "link").frame(minHeight: 36)
+                Label("确认下载器身份", systemImage: "checkmark.shield").frame(minHeight: 36)
             }
             Divider()
             HStack {
@@ -146,6 +146,11 @@ struct SettingsView: View {
     private var appearance: some View {
         DKCard {
             DKSectionTitle(title: "应用设置")
+            Toggle(isOn: $preferences.characterBackgroundsEnabled) {
+                Label("角色背景", systemImage: "photo")
+            }.tint(DKTheme.accent).accessibilityIdentifier("settings.characterBackgrounds")
+            Text("各页面使用不同角色背景；关闭后使用纯色背景，其他外观设置保持不变。")
+                .font(.caption).foregroundStyle(DKTheme.muted)
             HStack {
                 Label("外观主题", systemImage: "paintpalette")
                 Spacer(minLength: 8)
@@ -268,8 +273,15 @@ private struct DownloaderBindingsSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("请将 MoviePilot 中的下载器，明确对应到 App 已配置的同一个下载器。名称和地址可能不同，请核对后选择；未绑定的下载器不能从 App 发起下载。")
-                    .font(.subheadline).foregroundStyle(DKTheme.muted)
+                DKCard {
+                    DKSectionTitle(title: "这一步是做什么？")
+                    Text("告诉 App：MoviePilot 中的下载器，是你在“服务器设置”里添加的哪一台。确认后，才能把任务发到正确位置，并遵守这台下载器的操作保护。")
+                        .font(.subheadline).foregroundStyle(DKTheme.muted)
+                    Text("例如：MP 的“主力下载器”与 App 的“家庭 qB1”实际是同一台，就选择“家庭 qB1”。如果不是同一台，请不要这样选择。")
+                        .font(.subheadline)
+                    Text("不确定时保持“暂不选择”。确认身份只保存本机设置，不会修改 MP，也不会开始下载。")
+                        .font(.caption).foregroundStyle(DKTheme.muted)
+                }
                 ForEach(downloaders) { downloader in
                     DKCard {
                         Text(downloader.name).font(.headline)
@@ -278,18 +290,18 @@ private struct DownloaderBindingsSettingsView: View {
                             Text(endpoint).font(.caption).foregroundStyle(DKTheme.muted).textSelection(.enabled)
                         }
                         HStack {
-                            Label("对应 App 下载器", systemImage: "link")
+                            Label("App 中的同一台下载器", systemImage: "link")
                             Spacer(minLength: 8)
-                            Picker("对应 App 下载器", selection: Binding<ServiceKind?>(get: {
+                            Picker("App 中的同一台下载器", selection: Binding<ServiceKind?>(get: {
                                 preferences.boundDownloaderKind(for: downloader.bindingID, baseURL: baseURL)
                             }, set: {
                                 preferences.setBoundDownloaderKind($0, for: downloader.bindingID, baseURL: baseURL)
                             })) {
-                                Text("未绑定").tag(ServiceKind?.none)
+                                Text("暂不选择").tag(ServiceKind?.none)
                                 ForEach(availableKinds(for: downloader)) { kind in
                                     Text(LocalizedStringKey(kind.compactTitle)).tag(Optional(kind))
                                 }
-                            }.pickerStyle(.menu).labelsHidden().accessibilityLabel("对应 App 下载器")
+                            }.pickerStyle(.menu).labelsHidden().accessibilityLabel("App 中的同一台下载器")
                         }.frame(minHeight: 44)
                         if availableKinds(for: downloader).isEmpty {
                             Text("请先配置与该类型相符的下载器连接。")
@@ -304,11 +316,11 @@ private struct DownloaderBindingsSettingsView: View {
                         Label("读取 MP 下载器", systemImage: "arrow.clockwise")
                     }
                 }.buttonStyle(.bordered).disabled(loading || model.locked || !model.isConfigured(.moviepilot))
-                Text("对应关系仅存本机，不改 MoviePilot 的下载器设置。下载仍遵守全局只读锁、服务操作权限和迁移保护。重新保存 MP 连接后需要重新确认。")
+                Text("下载仍遵守全局只读锁、服务操作权限和迁移保护。重新保存 MP 或下载器连接后，需要重新确认身份。")
                     .font(.caption).foregroundStyle(DKTheme.muted)
             }.padding(18)
         }
-        .navigationTitle("MP 下载器对应关系").navigationBarTitleDisplayMode(.inline).dkScreen()
+        .navigationTitle("确认下载器身份").navigationBarTitleDisplayMode(.inline).dkScreen()
         .task { await load() }.refreshable { await load() }
     }
 

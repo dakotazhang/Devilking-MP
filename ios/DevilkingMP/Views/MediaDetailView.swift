@@ -32,7 +32,7 @@ struct MPDiscoveryDetailView: View {
                         Button("完成") { dismiss() }.disabled(submitting).accessibilityIdentifier("media.detail.done")
                     }
                     HStack(alignment: .top, spacing: 20) {
-                        DKPoster(url: current.poster, width: 116, height: 174)
+                        DKPoster(url: current.poster, width: 116, height: 174, allowRetry: true)
                         VStack(alignment: .leading, spacing: 12) {
                             Text(current.title).font(.title2.weight(.bold)).textSelection(.enabled).accessibilityIdentifier("media.detail.title")
                             Text(current.metadataLine).font(.subheadline).foregroundStyle(DKTheme.muted)

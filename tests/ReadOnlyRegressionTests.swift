@@ -234,13 +234,16 @@ final class ReadOnlyRegressionTests: XCTestCase {
     func testRecommendationFailuresRemainVisibleAndDoNotEraseOtherSources() async throws {
         MockHTTP.handler = { request in
             XCTAssertEqual(request.httpMethod, "GET")
+            if request.url!.path.hasSuffix("/config/Recommend") { return (200,[:],self.envelope(["value":["正在热映":true,"豆瓣最新电影":true,"豆瓣最新电视剧":true,"豆瓣热门动漫":true]])) }
+            if request.url!.path.hasSuffix("/recommend/source") { return (200,[:],self.envelope([])) }
+            if request.url!.path.hasSuffix("/media/source") { return (200,[:],self.envelope([["media_source":"douban"]])) }
             if request.url!.path.hasSuffix("/douban_tvs") { return (503, [:], Data()) }
             return (200, [:], self.envelope([["title": "测试作品", "media_source": "douban", "media_id": "54321", "type": "电视剧"]]))
         }
         let sections = try await client().discoverySections()
         XCTAssertEqual(sections.count, 4)
-        XCTAssertNotNil(sections.first { $0.id == "douban_tvs" }?.error)
+        XCTAssertNotNil(sections.first { $0.id == "recommend/douban_tvs" }?.error)
         XCTAssertEqual(sections.filter { $0.error == nil }.count, 3)
-        XCTAssertTrue(sections.first { $0.id == "douban_tv_animation" }!.items.allSatisfy(\.isAnime))
+        XCTAssertTrue(sections.first { $0.id == "recommend/douban_tv_animation" }!.items.allSatisfy(\.isAnime))
     }
 }

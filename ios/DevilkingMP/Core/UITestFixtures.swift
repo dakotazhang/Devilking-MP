@@ -1,9 +1,43 @@
 #if DEBUG
 import Foundation
+import UIKit
 
 /// Synthetic UI-test data only. No credentials, Keychain writes, production
 /// addresses, downloads or API clients are used. This file is absent in Release.
 @MainActor enum UITestFixtures {
+    private static var posterImages: [String: UIImage] = [:]
+
+    /// Small, local, visibly synthetic posters exercise foreground image
+    /// layering without contacting a tracker, metadata provider or MP server.
+    static func poster(_ reference: String, width: CGFloat, height: CGFloat) -> UIImage {
+        if let cached = posterImages[reference] { return cached }
+        let palette: [UIColor] = [.systemIndigo, .systemTeal, .systemPurple, .systemBlue, .systemOrange]
+        let color = palette[reference.utf8.reduce(0) { ($0 + Int($1)) % palette.count }]
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 160, height: 240), format: format).image { renderer in
+            color.setFill()
+            renderer.fill(CGRect(x: 0, y: 0, width: 160, height: 240))
+            UIColor.black.withAlphaComponent(0.28).setFill()
+            renderer.fill(CGRect(x: 0, y: 166, width: 160, height: 74))
+            UIImage(systemName: "film.stack")?.withTintColor(.white, renderingMode: .alwaysOriginal)
+                .draw(in: CGRect(x: 47, y: 60, width: 66, height: 66))
+            ("合成海报" as NSString).draw(in: CGRect(x: 12, y: 181, width: 136, height: 30), withAttributes: [
+                .font: UIFont.boldSystemFont(ofSize: 22), .foregroundColor: UIColor.white
+            ])
+            ("LOCAL FIXTURE" as NSString).draw(in: CGRect(x: 12, y: 212, width: 136, height: 18), withAttributes: [
+                .font: UIFont.systemFont(ofSize: 11, weight: .medium), .foregroundColor: UIColor.white
+            ])
+        }
+        posterImages[reference] = image
+        return image
+    }
+
+    static func artwork(_ reference: String) -> Data? {
+        guard reference.hasPrefix("dkfixture:") else { return nil }
+        return poster(reference, width: 160, height: 240).pngData()
+    }
     static func apply(to model: AppModel) {
         model.uiFixtureMode = true
         model.profiles = [ServiceKind.qb1, .qb2, .tr, .moviepilot].map {
@@ -97,11 +131,11 @@ import Foundation
 
     static func subscriptions() -> [Subscription] {
         [
-            Subscription(id: "88001", title: "合成追订 · 海港来信", detail: "2026 · 电视剧 · 第1季", state: "R", poster: nil, progress: 0.5,
+            Subscription(id: "88001", title: "合成追订 · 海港来信", detail: "2026 · 电视剧 · 第1季", state: "R", poster: "dkfixture:88001", progress: 0.5,
                          mediaSource: "themoviedb", mediaID: "990020", season: 1, rawState: "R", progressKnown: true, mediaType: "电视剧"),
-            Subscription(id: "88002", title: "合成暂停 · 山川回声", detail: "2025 · 电视剧 · 第2季", state: "S", poster: nil, progress: 0.2,
+            Subscription(id: "88002", title: "合成暂停 · 山川回声", detail: "2025 · 电视剧 · 第2季", state: "S", poster: "dkfixture:88002", progress: 0.2,
                          mediaSource: "themoviedb", mediaID: "990021", season: 2, rawState: "S", progressKnown: true, mediaType: "电视剧"),
-            Subscription(id: "88003", title: "合成等待 · 秋日旅程", detail: "2026 · 电影", state: "N", poster: nil, progress: 0,
+            Subscription(id: "88003", title: "合成等待 · 秋日旅程", detail: "2026 · 电影", state: "N", poster: "dkfixture:88003", progress: 0,
                          mediaSource: "themoviedb", mediaID: "990022", season: nil, rawState: "N", progressKnown: false, mediaType: "电影")
         ]
     }
@@ -148,7 +182,7 @@ import Foundation
                        ("990007", "合成动画：云端花园", "电视剧"), ("990008", "合成动画：冬日物语", "电影")]
         return entries.enumerated().map { index, entry in
             MPDiscoveryItem(mediaSource: "themoviedb", mediaID: entry.0, title: entry.1, year: "2026", mediaType: entry.2,
-                            poster: nil, backdrop: nil, overview: "这是一部完全虚构的测试作品，用于验证发现、搜索、剧集选季和只读订阅保护。不会搜索站点或下载任何内容。",
+                            poster: "dkfixture:" + entry.0, backdrop: nil, overview: "这是一部完全虚构的测试作品，用于验证发现、搜索、剧集选季和只读订阅保护。不会搜索站点或下载任何内容。",
                             rating: 7.1 + Double(index) / 10, genres: index >= 6 ? ["动画"] : ["剧情"], isAnime: index >= 6)
         }
     }

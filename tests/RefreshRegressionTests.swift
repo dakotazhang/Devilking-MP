@@ -18,7 +18,16 @@ private final class RefreshHTTP:URLProtocol {
         guard Self.state.begin() else{return} // Deliberately unresponsive until cancelled.
         let data:Data
         if request.url!.path.hasSuffix("app/version") { data=Data("v5.2.4".utf8) }
+        else if request.url!.path.hasSuffix("/config/Recommend") {
+            data=try! JSONSerialization.data(withJSONObject:["success":true,"data":["value":NSNull()]])
+        } else if request.url!.path.hasSuffix("/media/source") {
+            data=try! JSONSerialization.data(withJSONObject:["success":true,"data":[["media_source":"themoviedb"],["media_source":"douban"],["media_source":"bangumi"],["media_source":"anilist"]]])
+        } else if request.url!.path.hasSuffix("/recommend/source") {
+            data=try! JSONSerialization.data(withJSONObject:["success":true,"data":[]])
+        }
         else if request.url!.path.contains("recommend") {
+            data=try! JSONSerialization.data(withJSONObject:["success":true,"data":[]])
+        } else if request.url!.path.contains("anilist") {
             data=try! JSONSerialization.data(withJSONObject:["success":true,"data":[]])
         } else {
             data=try! JSONSerialization.data(withJSONObject:["full_update":true,"torrents":[:],"server_state":["dl_info_speed":0,"up_info_speed":0,"free_space_on_disk":1000]])
@@ -95,7 +104,7 @@ final class RefreshRegressionTests:XCTestCase {
         RefreshHTTP.state.reset(healthy:true)
         await model.loadDiscovery()
         XCTAssertFalse(model.discoveryLoading);XCTAssertNil(model.discoveryError)
-        XCTAssertEqual(model.discoverySections.count,4);XCTAssertNotNil(model.discoveryUpdatedAt)
+        XCTAssertEqual(model.discoverySections.count,15);XCTAssertNotNil(model.discoveryUpdatedAt)
     }
     @MainActor func testDiscoveryTimeoutClearsSpinnerAndPreservesPriorContent() async {
         let name="RefreshTest."+UUID().uuidString,defaults=UserDefaults(suiteName:name)!

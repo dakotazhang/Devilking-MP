@@ -16,14 +16,19 @@ struct RootView: View {
                     downloaderFilter = filter
                     selectedTab = 1
                 })
+                    .environment(\.dkPageCharacter, .rem)
                     .tabItem { Label("仪表盘", systemImage: "chart.bar.fill") }.tag(0)
                 DownloadersView(selectedKind: $selectedDownloader, filter: $downloaderFilter)
+                    .environment(\.dkPageCharacter, .emilia)
                     .tabItem { Label("下载器", systemImage: "arrow.up.arrow.down") }.tag(1)
                 MoviePilotView()
+                    .environment(\.dkPageCharacter, .ram)
                     .tabItem { Label("发现", systemImage: "sparkles.tv") }.tag(2)
                 SubscriptionsView()
+                    .environment(\.dkPageCharacter, .beatrice)
                     .tabItem { Label("订阅", systemImage: "bookmark") }.tag(3)
                 SettingsView()
+                    .environment(\.dkPageCharacter, .echidna)
                     .tabItem { Label("设置", systemImage: "slider.horizontal.3") }.tag(4)
             }
             .tint(DKTheme.accent)

@@ -1,0 +1,15 @@
+{
+  "images": [
+    {
+      "filename": "PageBeatrice.png",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "dakotazhang",
+    "version": 1
+  },
+  "properties": {
+    "preserves-vector-representation": false
+  }
+}

@@ -211,6 +211,73 @@ final class UITests: XCTestCase {
         XCTAssertTrue(diskTitle.exists)
     }
 
+    func testCharacterBackgroundTogglePreservesForegroundPostersAndControls() throws {
+        let app = launchFixture()
+        let enabledDashboard = app.screenshot()
+        app.tabBars.buttons["发现"].tap()
+        let poster = app.buttons["discovery.media.990001"]
+        XCTAssertTrue(poster.waitForExistence(timeout: 5))
+        let renderedPoster = app.buttons.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "discovery.media.990001", "合成海报已载入")).firstMatch
+        XCTAssertTrue(renderedPoster.waitForExistence(timeout: 5), "The synthetic poster must be decoded and rendered, not a placeholder")
+        try attachRenderedScreenshot(app, name: "15-background-with-foreground-posters")
+        app.tabBars.buttons["订阅"].tap()
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "合成海报已载入")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["subscription.action.88001"].isEnabled)
+        app.tabBars.buttons["设置"].tap()
+        let toggle = app.switches["settings.characterBackgrounds"]
+        reveal(toggle, in: app)
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertEqual(toggle.value as? String, "1")
+        toggle.tap()
+        app.tabBars.buttons["仪表盘"].tap()
+        XCTAssertTrue(app.buttons["dashboard.refresh"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["dashboard.refresh"].isEnabled)
+        let disabledDashboard = app.screenshot()
+        XCTAssertGreaterThan(changedPixelFraction(enabledDashboard, disabledDashboard), 0.005,
+                             "Turning off character backgrounds must visibly remove the decorative layer")
+        assertButtonsBelowStatusBar(app)
+        try attachRenderedScreenshot(app, name: "16-background-disabled-dashboard")
+        app.tabBars.buttons["发现"].tap()
+        XCTAssertTrue(poster.waitForExistence(timeout: 5))
+        XCTAssertTrue(renderedPoster.waitForExistence(timeout: 5))
+        poster.tap()
+        XCTAssertTrue(app.staticTexts["media.detail.title"].waitForExistence(timeout: 5))
+        let subscribe = app.buttons["media.subscribe"]
+        reveal(subscribe, in: app)
+        XCTAssertFalse(subscribe.isEnabled)
+    }
+
+    private func raster(_ screenshot: XCUIScreenshot, region: CGRect? = nil) -> [UInt8] {
+        guard let original = screenshot.image.cgImage else { return [] }
+        let source: CGImage
+        if let region {
+            let scale = CGFloat(original.width) / screenshot.image.size.width
+            guard let crop = original.cropping(to: CGRect(x: region.minX * scale, y: region.minY * scale,
+                                                         width: region.width * scale, height: region.height * scale)) else { return [] }
+            source = crop
+        } else { source = original }
+        let width = 64, height = min(256, max(1, Int(Double(source.height) / Double(source.width) * 64)))
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                          bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+            context.draw(source, in: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+        }
+        return pixels
+    }
+
+    private func changedPixelFraction(_ first: XCUIScreenshot, _ second: XCUIScreenshot) -> Double {
+        let left = raster(first), right = raster(second)
+        guard !left.isEmpty, left.count == right.count else { return 0 }
+        var changed = 0
+        for index in stride(from: 0, to: left.count - 3, by: 4) {
+            let delta = (0..<3).map { abs(Int(left[index + $0]) - Int(right[index + $0])) }.max() ?? 0
+            if delta > 10 { changed += 1 }
+        }
+        return Double(changed) / Double(left.count / 4)
+    }
+
     private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
         for _ in 0..<5 {
             if element.exists && element.isHittable { return }

@@ -292,7 +292,7 @@ private struct MPResourceDownloadView: View {
                             ForEach(downloaders) { value in Text(value.name).tag(value.id) }
                         }.accessibilityIdentifier("resources.downloader")
                         if downloader != nil {
-                            Text(boundKind.map { "对应应用连接：" + $0.compactTitle } ?? "未绑定：请先在设置完成下载器对应关系。")
+                            Text(boundKind.map { "对应应用连接：" + $0.compactTitle } ?? "未绑定：请先在设置确认下载器身份。")
                                 .font(.caption).foregroundStyle(boundKind == nil ? DKTheme.amber : DKTheme.muted)
                                 .accessibilityIdentifier("resources.binding")
                         }

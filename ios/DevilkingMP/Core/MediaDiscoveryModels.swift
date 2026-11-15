@@ -29,7 +29,7 @@ struct MPDiscoveryItem: Identifiable, Equatable {
     var canonicalType: String { isTV ? "电视剧" : (isMovie ? "电影" : mediaType) }
     var typeTitle: String { isAnime ? (isTV ? "动画剧集" : "动画电影") : canonicalType }
     var hasSubscribableIdentity: Bool {
-        ["themoviedb", "tmdb", "douban"].contains(mediaSource) && !mediaID.isEmpty && mediaID.count <= 20 &&
+        ["themoviedb", "tmdb", "douban", "bangumi", "anilist"].contains(mediaSource) && !mediaID.isEmpty && mediaID.count <= 20 &&
             mediaID.utf8.allSatisfy { (48...57).contains($0) } && mediaID.contains(where: { $0 != "0" }) && (isTV || isMovie)
     }
     var metadataLine: String { [year, typeTitle].filter { !$0.isEmpty }.joined(separator: " · ") }
@@ -95,13 +95,9 @@ enum MPSubscriptionFilter: String, CaseIterable, Identifiable {
 }
 
 enum MPDiscoveryParser {
-    /// Public artwork URLs never inherit the service's authentication headers or URL parameters.
+    /// References are normalized for the MP image proxy, never direct browser navigation.
     static func artwork(_ raw: String) -> String? {
-        guard !raw.isEmpty else { return nil }
-        let normalized = raw.hasPrefix("/") && !raw.hasPrefix("//") ? "https://image.tmdb.org/t/p/w500" + raw : raw
-        guard let parts = URLComponents(string: normalized), parts.scheme == "https", parts.host != nil,
-              parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil else { return nil }
-        return parts.url?.absoluteString
+        MPArtworkPolicy.reference(raw)
     }
 
     static func item(_ row: [String: Any], defaultSource: String? = nil, defaultType: String? = nil) -> MPDiscoveryItem? {
