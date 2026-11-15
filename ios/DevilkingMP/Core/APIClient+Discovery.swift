@@ -11,20 +11,29 @@ extension APIClient {
             ("douban_tvs", "豆瓣剧集", "随时选择下一部追剧", .tv, "电视剧"),
             ("douban_tv_animation", "豆瓣动画", "动画与番剧推荐", .anime, "电视剧")
         ]
-        var sections = [MPDiscoverySection]()
-        for (source, title, subtitle, category, type) in sources {
-            if Task.isCancelled { throw CancellationError() }
-            do {
-                let value = try await get("/api/v1/recommend/" + source, query: ["page": "1", "count": "12"])
-                let rows = try Self.discoveryRows(value)
-                var items = try Self.discoveryItems(rows, defaultSource: "douban", defaultType: type)
-                if category == .anime { items = items.map { var item = $0; item.isAnime = true; return item } }
-                sections.append(MPDiscoverySection(id: source, title: title, subtitle: subtitle, category: category, items: items))
-            } catch {
-                if Task.isCancelled { throw CancellationError() }
-                sections.append(MPDiscoverySection(id: source, title: title, subtitle: subtitle, category: category, items: [], error: Self.discoveryError(error)))
+        // Authenticate once before concurrent reads. A slow recommendation
+        // provider must not serialize four entire request timeouts.
+        try await prepareReadSession()
+        let sections = await withTaskGroup(of: (Int, MPDiscoverySection).self) { group in
+            for (index, entry) in sources.enumerated() {
+                group.addTask {
+                    let (source, title, subtitle, category, type)=entry
+                    do {
+                        let value=try await self.get("/api/v1/recommend/"+source,query:["page":"1","count":"12"])
+                        let rows=try Self.discoveryRows(value)
+                        var items=try Self.discoveryItems(rows,defaultSource:"douban",defaultType:type)
+                        if category == .anime { items=items.map { var item=$0;item.isAnime=true;return item } }
+                        return (index,MPDiscoverySection(id:source,title:title,subtitle:subtitle,category:category,items:items))
+                    } catch {
+                        return (index,MPDiscoverySection(id:source,title:title,subtitle:subtitle,category:category,items:[],error:Self.discoveryError(error)))
+                    }
+                }
             }
+            var result=[(Int,MPDiscoverySection)]()
+            for await entry in group { result.append(entry) }
+            return result.sorted{$0.0 < $1.0}.map{$0.1}
         }
+        try Task.checkCancellation()
         return sections
     }
 

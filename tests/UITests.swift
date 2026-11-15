@@ -3,10 +3,10 @@ import UIKit
 import CoreFoundation
 
 final class UITests: XCTestCase {
-    private func launchFixture() -> XCUIApplication {
+    private func launchFixture(arguments: [String] = []) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchArguments = ["--ui-fixture", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launchArguments = ["--ui-fixture", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"] + arguments
         app.launch()
         XCTAssertTrue(app.tabBars.buttons["仪表盘"].waitForExistence(timeout: 15))
         return app
@@ -93,10 +93,128 @@ final class UITests: XCTestCase {
         try attachRenderedScreenshot(app, name: "09-subscriptions-search")
     }
 
+    func testEmptyDiscoveryRefreshRemainsUsable() throws {
+        let app = launchFixture(arguments: ["--ui-fixture-empty-discovery"])
+        app.tabBars.buttons["发现"].tap()
+        XCTAssertTrue(app.staticTexts["暂无推荐资料"].waitForExistence(timeout: 5))
+        let refresh = app.buttons["discovery.refresh"]
+        XCTAssertTrue(refresh.waitForExistence(timeout: 5))
+        XCTAssertTrue(refresh.isEnabled)
+        refresh.tap()
+        XCTAssertTrue(refresh.isEnabled, "A completed refresh must not leave a permanent spinner or disabled button")
+        let page = app.scrollViews.firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 5))
+        page.swipeDown()
+        XCTAssertTrue(app.staticTexts["暂无推荐资料"].waitForExistence(timeout: 5))
+        XCTAssertTrue(refresh.isEnabled)
+        assertButtonsBelowStatusBar(app)
+        try attachRenderedScreenshot(app, name: "10-empty-discovery-refresh")
+    }
+
+    func testStationResourceSearchRequiresSelectionAndDownloadStaysReadOnly() throws {
+        let app = launchFixture()
+        app.tabBars.buttons["发现"].tap()
+        let modes = app.segmentedControls["discovery.searchMode"]
+        XCTAssertTrue(modes.waitForExistence(timeout: 5))
+        modes.buttons["PT资源"].tap()
+        let query = app.textFields["resources.query"]
+        XCTAssertTrue(query.waitForExistence(timeout: 5))
+        query.tap()
+        query.typeText("星海远航\n")
+        let search = app.buttons["resources.search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        XCTAssertFalse(search.isEnabled, "An unselected station list must never trigger all-site searches")
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "resources.result.")).firstMatch.exists)
+        let site = app.buttons["resources.site.1"]
+        reveal(site, in: app)
+        XCTAssertTrue(site.waitForExistence(timeout: 5))
+        site.tap()
+        // Selecting a station only changes local form state.
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "resources.result.")).firstMatch.exists)
+        reveal(search, in: app)
+        XCTAssertTrue(search.isEnabled)
+        search.tap()
+        let result = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "resources.result.")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        reveal(result, in: app)
+        try attachRenderedScreenshot(app, name: "11-station-resource-results")
+        result.tap()
+        XCTAssertTrue(app.navigationBars["资源详情"].waitForExistence(timeout: 5))
+        let downloader = app.buttons["resources.downloader"]
+        reveal(downloader, in: app)
+        XCTAssertTrue(downloader.waitForExistence(timeout: 5))
+        downloader.tap()
+        let target = app.buttons.matching(identifier: "合成主力下载器").firstMatch
+        XCTAssertTrue(target.waitForExistence(timeout: 5))
+        target.tap()
+        XCTAssertTrue(app.buttons["resources.directory"].exists)
+        let download = app.buttons["resources.download"]
+        reveal(download, in: app)
+        XCTAssertTrue(download.exists)
+        XCTAssertFalse(download.isEnabled, "A read-only app must not create torrent downloads after choosing a destination")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "resources.readonly").firstMatch.exists)
+        XCTAssertFalse(app.alerts["确认新增下载任务？"].exists)
+        assertButtonsBelowStatusBar(app)
+        try attachRenderedScreenshot(app, name: "12-resource-download-readonly")
+    }
+
+    func testDisplaySettingsChangeOnlyLocalPresentation() throws {
+        let app = launchFixture()
+        app.tabBars.buttons["设置"].tap()
+        let refresh = app.buttons["settings.refreshInterval"]
+        reveal(refresh, in: app)
+        XCTAssertTrue(refresh.waitForExistence(timeout: 5))
+        refresh.tap()
+        app.buttons.matching(identifier: "关闭自动刷新").firstMatch.tap()
+        let theme = app.buttons["settings.theme"]
+        reveal(theme, in: app)
+        theme.tap()
+        app.buttons.matching(identifier: "浅色").firstMatch.tap()
+        try attachRenderedScreenshot(app, name: "13-settings-light-appearance")
+
+        let storage = app.switches["settings.module.storage"]
+        reveal(storage, in: app)
+        XCTAssertTrue(storage.waitForExistence(timeout: 5))
+        XCTAssertEqual(storage.value as? String, "1")
+        storage.tap()
+        app.tabBars.buttons["仪表盘"].tap()
+        XCTAssertTrue(app.staticTexts["仅手动刷新 · 默认只读"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["磁盘余量"].exists)
+        XCTAssertTrue(app.buttons["dashboard.refresh"].isEnabled)
+        try attachRenderedScreenshot(app, name: "14-dashboard-local-module-settings")
+
+        app.tabBars.buttons["设置"].tap()
+        reveal(storage, in: app)
+        storage.tap()
+        reveal(refresh, in: app)
+        refresh.tap()
+        app.buttons.matching(identifier: "60 秒").firstMatch.tap()
+        reveal(theme, in: app)
+        theme.tap()
+        app.buttons.matching(identifier: "跟随系统").firstMatch.tap()
+        let language = app.buttons["settings.language"]
+        reveal(language, in: app)
+        language.tap()
+        app.buttons.matching(identifier: "English").firstMatch.tap()
+        XCTAssertTrue(app.tabBars.buttons["Settings"].waitForExistence(timeout: 5))
+        reveal(language, in: app)
+        language.tap()
+        app.buttons.matching(identifier: "简体中文").firstMatch.tap()
+        XCTAssertTrue(app.tabBars.buttons["设置"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["仪表盘"].tap()
+        let diskTitle = app.staticTexts["磁盘余量"]
+        reveal(diskTitle, in: app)
+        XCTAssertTrue(diskTitle.exists)
+    }
+
     private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
         for _ in 0..<5 {
             if element.exists && element.isHittable { return }
             app.swipeUp()
+        }
+        for _ in 0..<8 {
+            if element.exists && element.isHittable { return }
+            app.swipeDown()
         }
     }
 

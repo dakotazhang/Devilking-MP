@@ -6,6 +6,7 @@ struct MoviePilotView: View {
     @State private var submittedQuery = ""
     @State private var category = MPBrowseCategory.all
     @State private var selectedMedia: MPDiscoveryItem?
+    @State private var searchMode = MPDiscoverySearchMode.media
 
     private var searching: Bool { !submittedQuery.isEmpty }
     private var filteredResults: [MPDiscoveryItem] { model.discoveryResults.filter { category.includes($0) } }
@@ -15,6 +16,41 @@ struct MoviePilotView: View {
 
     var body: some View {
         NavigationStack {
+            VStack(spacing: 0) {
+                Picker("搜索范围", selection: $searchMode) {
+                    Text("影视").tag(MPDiscoverySearchMode.media)
+                    Text("PT资源").tag(MPDiscoverySearchMode.resources)
+                }
+                .pickerStyle(.segmented).padding(.horizontal, 18).padding(.vertical, 10)
+                .accessibilityIdentifier("discovery.searchMode")
+                if searchMode == .resources {
+                    MPResourceSearchView()
+                } else {
+                    mediaPage
+                }
+            }
+            .navigationTitle("发现")
+            .toolbar {
+                if searchMode == .media {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button {
+                            if model.discoveryLoading { model.cancelDiscoveryRefresh() }
+                            else { Task { await reload() } }
+                        } label: {
+                            Label(model.discoveryLoading ? "取消刷新" : "刷新", systemImage: model.discoveryLoading ? "xmark.circle" : "arrow.clockwise")
+                        }
+                            .disabled(model.discoverySearchLoading)
+                            .accessibilityIdentifier("discovery.refresh")
+                    }
+                }
+            }
+            .sheet(item: $selectedMedia) { item in MPDiscoveryDetailView(item: item) }
+            .dkScreen()
+        }
+    }
+
+    private var mediaPage: some View {
+        GeometryReader { geometry in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 24) {
                     if !model.isConfigured(.moviepilot) {
@@ -34,8 +70,10 @@ struct MoviePilotView: View {
                             .padding(.vertical, 8)
                     }
                 }.padding(18)
+                    // A short or empty recommendation page must still allow a
+                    // real pull-to-refresh gesture on iOS 16.1.
+                    .frame(minHeight: geometry.size.height + 1, alignment: .top)
             }
-            .navigationTitle("发现")
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索电影、剧集和动漫")
             .onSubmit(of: .search) { search() }
             .onChange(of: query) { value in
@@ -43,8 +81,7 @@ struct MoviePilotView: View {
             }
             .refreshable { await reload() }
             .task { if model.discoverySections.isEmpty { await reload() } }
-            .sheet(item: $selectedMedia) { item in MPDiscoveryDetailView(item: item) }
-            .dkScreen()
+            .onDisappear { model.cancelDiscoveryRefresh() }
         }
     }
 
@@ -52,8 +89,12 @@ struct MoviePilotView: View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(searching ? "找到想看的下一部" : "好作品，随时追订").font(.title3.weight(.bold))
-                Text(searching ? "影视资料搜索，不会触发下载。" : "从推荐中发现，或搜索片名后选择订阅。")
+                Text(searching ? "选择作品后，按默认规则订阅，或搜索站点资源。" : "发现作品后订阅；想挑选具体种子，可切换“PT资源”。")
                     .font(.caption).foregroundStyle(DKTheme.muted)
+                if let updated = model.discoveryUpdatedAt, !searching {
+                    Text("更新于 \(updated.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption2).foregroundStyle(DKTheme.muted)
+                }
             }
             Spacer(minLength: 0)
             Label(model.canManage(.moviepilot) ? "可订阅" : "仅查看", systemImage: model.canManage(.moviepilot) ? "bookmark" : "lock")
@@ -136,9 +177,10 @@ struct MoviePilotView: View {
     private func reload() async {
         guard model.isConfigured(.moviepilot) else { return }
         if searching { await model.searchDiscovery(submittedQuery) } else { await model.loadDiscovery() }
-        await model.loadMoviePilot()
     }
 }
+
+private enum MPDiscoverySearchMode: Hashable { case media, resources }
 
 struct MPDiscoveryPosterCard: View {
     let item: MPDiscoveryItem
@@ -152,7 +194,7 @@ struct MPDiscoveryPosterCard: View {
                         .background(.black.opacity(0.75), in: Capsule()).padding(7)
                 }
             }
-            Text(item.title).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+            Text(item.title).font(.subheadline.weight(.semibold)).foregroundStyle(DKTheme.text).lineLimit(2)
                 .frame(height: 40, alignment: .topLeading)
             Text(item.metadataLine).font(.caption2).foregroundStyle(DKTheme.muted).lineLimit(1)
         }.frame(width: 132, alignment: .leading)
@@ -167,7 +209,7 @@ struct MPDiscoverySearchRow: View {
             HStack(alignment: .top, spacing: 14) {
                 DKPoster(url: item.poster, width: 76, height: 112)
                 VStack(alignment: .leading, spacing: 7) {
-                    Text(item.title).font(.headline).foregroundStyle(.white).lineLimit(2)
+                    Text(item.title).font(.headline).foregroundStyle(DKTheme.text).lineLimit(2)
                     HStack(spacing: 8) {
                         if let rating = item.rating {
                             Label(String(format: "%.1f", rating), systemImage: "star.fill").foregroundStyle(DKTheme.amber)

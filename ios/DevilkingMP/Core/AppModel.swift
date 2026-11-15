@@ -9,12 +9,17 @@ import LocalAuthentication
     @Published var subscriptions: [Subscription]=[]
     @Published var dashboardSnapshots: [ServiceKind:DashboardSnapshot]=[:]
     @Published var dashboardRefreshing=false
+    @Published var dashboardManualRefreshing=false
     @Published var discoverySections:[MPDiscoverySection]=[]
     @Published var discoveryResults:[MPDiscoveryItem]=[]
     @Published var discoveryLoading=false
     @Published var discoverySearchLoading=false
     @Published var discoveryError:String?
     @Published var discoveryQuery=""
+    @Published var discoveryUpdatedAt:Date?
+    @Published var resourceDirectoryOptions:[MPResourceDirectory]=[]
+    @Published var resourceDirectoriesLoading=false
+    @Published var resourceDirectoriesError:String?
     @Published var sites: [SiteAccount]=[]
     @Published var library: [MediaItem]=[]
     @Published var searchResults: [MediaItem]=[]
@@ -26,23 +31,34 @@ import LocalAuthentication
     @Published var biometricEnabled: Bool { didSet { defaults.set(biometricEnabled,forKey:"biometricEnabled") } }
     @Published var locked=false
     private let defaults:UserDefaults
+    let preferences:AppPreferences
     private let credentialReader:(ServiceKind)->Credential
+    private let clientFactory:(ServiceProfile,Credential)->APIClient
+    private let readBudgetSeconds:TimeInterval
     private var clients:[ServiceKind:APIClient]=[:]
     private var inflight=Set<String>()
     private var refreshRunning=false
     private var actionInFlight=false
     private var generation=0
     private var discoverySearchGeneration=0
+    private var dashboardJob:Task<Void,Never>?
+    private var dashboardCycle:UUID?
+    private var discoveryJob:Task<Void,Never>?
+    private var discoveryCycle:UUID?
     #if DEBUG
     var uiFixtureMode=false
     #endif
     private let posterCache:NSCache<NSString,NSData> = {let c=NSCache<NSString,NSData>();c.countLimit=100;c.totalCostLimit=32*1024*1024;return c}()
-    init(defaults:UserDefaults = .standard, credentialReader:@escaping (ServiceKind)->Credential = { KeychainStore.read($0) }) {
+    init(defaults:UserDefaults = .standard, credentialReader:@escaping (ServiceKind)->Credential = { KeychainStore.read($0) }, clientFactory:@escaping (ServiceProfile,Credential)->APIClient = { APIClient(profile:$0,credentials:$1) }, readBudgetSeconds:TimeInterval = 22) {
         #if DEBUG
         let defaults = ProcessInfo.processInfo.arguments.contains("--ui-fixture") ? UserDefaults(suiteName:"DevilkingMP-UITestFixture")! : defaults
+        if ProcessInfo.processInfo.arguments.contains("--ui-fixture") { defaults.removePersistentDomain(forName:"DevilkingMP-UITestFixture") }
         #endif
         self.defaults=defaults
+        preferences=AppPreferences(defaults:defaults)
         self.credentialReader=credentialReader
+        self.clientFactory=clientFactory
+        self.readBudgetSeconds=readBudgetSeconds
         profiles=(defaults.data(forKey:"profiles").flatMap{try? JSONDecoder().decode([ServiceProfile].self,from:$0)}) ?? ServiceKind.allCases.map{ServiceProfile(kind:$0,baseURL:$0.defaultURL,username:"")}
         migrationProtection=defaults.object(forKey:"migrationProtection") == nil ? true:defaults.bool(forKey:"migrationProtection")
         readOnlyMode=defaults.object(forKey:"readOnlyMode") == nil ? true:defaults.bool(forKey:"readOnlyMode")
@@ -71,18 +87,22 @@ import LocalAuthentication
         guard !password.isEmpty || !apiKey.isEmpty else { throw AppError.message("请填写密码或 API Key。") }
         if apiKey.isEmpty && username.isEmpty { throw AppError.message("请输入用户名。") }
         try KeychainStore.write(Credential(username:username,password:password,apiKey:apiKey),kind:kind)
+        resetReadJobs()
+        if kind == .moviepilot || kind.isDownloader { preferences.clearResourcePreferences(for:profile(.moviepilot).baseURL) }
         let p=ServiceProfile(kind:kind,baseURL:url.absoluteString.trimmingCharacters(in:CharacterSet(charactersIn:"/")),username:username,allowActions:allowActions)
         if let i=profiles.firstIndex(where:{$0.kind == kind}) { profiles[i]=p } else { profiles.append(p) }
         clients[kind]=nil;snapshots[kind]=nil;dashboardSnapshots[kind]=nil;tasks.removeAll{$0.kind == kind}
-        if kind == .moviepilot{subscriptions=[];sites=[];searchResults=[];discoverySections=[];discoveryResults=[];discoveryError=nil}
+        if kind == .moviepilot{subscriptions=[];sites=[];searchResults=[];discoverySections=[];discoveryResults=[];discoveryError=nil;discoveryUpdatedAt=nil;resourceDirectoryOptions=[];resourceDirectoriesError=nil}
         if kind == .emby{library=[];sessions=[]};persist()
         if kind == .emby{posterCache.removeAllObjects()}
     }
     func disconnect(_ kind:ServiceKind) {
         generation &+= 1
+        resetReadJobs()
+        if kind == .moviepilot || kind.isDownloader { preferences.clearResourcePreferences(for:profile(.moviepilot).baseURL) }
         KeychainStore.delete(kind);clients[kind]=nil;snapshots[kind]=nil;dashboardSnapshots[kind]=nil
         tasks.removeAll{$0.kind == kind}
-        if kind == .moviepilot { subscriptions=[];sites=[];searchResults=[];discoverySections=[];discoveryResults=[];discoveryError=nil }
+        if kind == .moviepilot { subscriptions=[];sites=[];searchResults=[];discoverySections=[];discoveryResults=[];discoveryError=nil;discoveryUpdatedAt=nil;resourceDirectoryOptions=[];resourceDirectoriesError=nil }
         if kind == .emby { library=[];sessions=[] }
         if kind == .emby{posterCache.removeAllObjects()}
         if let i=profiles.firstIndex(where:{$0.kind == kind}) { profiles[i].allowActions=false;profiles[i].username="" };persist()
@@ -94,7 +114,7 @@ import LocalAuthentication
         guard !locked else { throw AppError.message("请先解锁应用。") }
         guard isConfigured(kind) else { throw AppError.message("请先连接 \(kind.title)。") }
         if let c=clients[kind] { return c }
-        let c=APIClient(profile:profile(kind),credentials:credential(kind));clients[kind]=c;return c
+        let c=clientFactory(profile(kind),credential(kind));clients[kind]=c;return c
     }
     static func safeError(_ error:Error)->String {
         if let e=error as? AppError { return e.localizedDescription }
@@ -107,27 +127,46 @@ import LocalAuthentication
         await refreshDashboard()
         if isConfigured(.moviepilot) { await refresh(.moviepilot) }
     }
-    func refreshDashboard() async {
-        guard !locked && !dashboardRefreshing else{return}
-        dashboardRefreshing=true;defer{dashboardRefreshing=false}
-        #if DEBUG
-        if uiFixtureMode { dashboardSnapshots=UITestFixtures.dashboard();return }
-        #endif
-        await withTaskGroup(of:Void.self) { group in
-            for kind in ServiceKind.allCases where kind.isDownloader && isConfigured(kind) {
-                group.addTask { await self.refreshDashboardService(kind) }
+    func refreshDashboard(manual:Bool = true) async {
+        guard !locked && !Task.isCancelled else{return}
+        if let job=dashboardJob {
+            if manual { dashboardManualRefreshing=true }
+            await job.value
+            return
+        }
+        let cycle=UUID()
+        dashboardCycle=cycle;dashboardRefreshing=true;dashboardManualRefreshing=manual
+        let job=Task { @MainActor [weak self] in
+            guard let self else{return}
+            defer {
+                if self.dashboardCycle == cycle {
+                    self.dashboardRefreshing=false;self.dashboardManualRefreshing=false
+                    self.dashboardJob=nil;self.dashboardCycle=nil
+                }
+            }
+            #if DEBUG
+            if self.uiFixtureMode { self.dashboardSnapshots=UITestFixtures.dashboard();return }
+            #endif
+            await withTaskGroup(of:Void.self) { group in
+                for kind in ServiceKind.allCases where kind.isDownloader && self.isConfigured(kind) {
+                    group.addTask { await self.refreshDashboardService(kind) }
+                }
             }
         }
+        dashboardJob=job
+        await withTaskCancellationHandler(operation:{ await job.value },onCancel:{ job.cancel() })
     }
     private func refreshDashboardService(_ kind:ServiceKind) async {
         let g=generation
         do {
-            let value=try await client(kind).dashboard()
+            let api=try client(kind)
+            let value=try await ReadBudget.run(seconds:readBudgetSeconds) { try await api.dashboard() }
             guard g == generation && !locked else{return}
             dashboardSnapshots[kind]=value
             snapshots[kind]=ServiceSnapshot(kind:kind,online:true,detail:kind.subtitle,downloadRate:value.downloadRate ?? 0,uploadRate:value.uploadRate ?? 0,taskCount:value.counts?.total)
         } catch {
             guard g == generation && !locked else{return}
+            guard !Task.isCancelled && !(error is CancellationError) else{return}
             clients[kind]=nil
             dashboardSnapshots[kind]=DashboardSnapshot.failure(kind:kind,previous:dashboardSnapshots[kind],error:Self.safeError(error))
             snapshots[kind]=ServiceSnapshot(kind:kind,online:false,detail:"连接未确认",error:Self.safeError(error))
@@ -178,17 +217,28 @@ import LocalAuthentication
         catch {if g == generation{clients[.moviepilot]=nil;message=Self.safeError(error)}}
     }
     func loadDiscovery() async {
-        guard !locked && !discoveryLoading else{return}
-        discoveryLoading=true;defer{discoveryLoading=false}
-        #if DEBUG
-        if uiFixtureMode { discoverySections=UITestFixtures.sections();discoveryError=nil;return }
-        #endif
-        let g=generation
-        do {
-            let rows=try await client(.moviepilot).discoverySections()
-            guard g == generation && !locked else{return}
-            discoverySections=rows;discoveryError=nil
-        } catch { if g == generation { discoveryError=Self.safeError(error) } }
+        guard !locked && !Task.isCancelled else{return}
+        if let job=discoveryJob { await job.value;return }
+        let cycle=UUID(),g=generation
+        discoveryCycle=cycle;discoveryLoading=true
+        let job=Task { @MainActor [weak self] in
+            guard let self else{return}
+            defer { if self.discoveryCycle == cycle { self.discoveryLoading=false;self.discoveryJob=nil;self.discoveryCycle=nil } }
+            #if DEBUG
+            if self.uiFixtureMode { self.discoverySections=UITestFixtures.sections();self.discoveryError=nil;self.discoveryUpdatedAt=Date();return }
+            #endif
+            do {
+                let api=try self.client(.moviepilot)
+                let rows=try await ReadBudget.run(seconds:self.readBudgetSeconds) { try await api.discoverySections() }
+                guard g == self.generation && !self.locked && !Task.isCancelled else{return}
+                self.discoverySections=rows;self.discoveryError=nil;self.discoveryUpdatedAt=Date()
+            } catch {
+                guard g == self.generation && !self.locked && !Task.isCancelled && !(error is CancellationError) else{return}
+                self.discoveryError=Self.safeError(error)
+            }
+        }
+        discoveryJob=job
+        await withTaskCancellationHandler(operation:{ await job.value },onCancel:{ job.cancel() })
     }
     func searchDiscovery(_ query:String) async {
         discoverySearchGeneration &+= 1
@@ -200,7 +250,8 @@ import LocalAuthentication
         if uiFixtureMode {discoveryResults=UITestFixtures.search(discoveryQuery);discoveryError=nil;return}
         #endif
         do {
-            let rows=try await client(.moviepilot).searchDiscovery(discoveryQuery)
+            let api=try client(.moviepilot),query=discoveryQuery
+            let rows=try await ReadBudget.run(seconds:readBudgetSeconds) { try await api.searchDiscovery(query) }
             guard epoch == discoverySearchGeneration && g == generation && !locked else{return}
             discoveryResults=rows;discoveryError=nil
         } catch { if epoch == discoverySearchGeneration && g == generation {discoveryError=Self.safeError(error)} }
@@ -216,6 +267,98 @@ import LocalAuthentication
     func hasSubscription(_ item:MPDiscoveryItem,season:Int?) -> Bool {
         let source=item.mediaSource == "tmdb" ? "themoviedb":item.mediaSource
         return subscriptions.contains{$0.mediaSource == source && $0.mediaID == item.mediaID && $0.mediaType == item.canonicalType && (item.isMovie || $0.season == season)}
+    }
+    func resourceSites() async throws -> [MPResourceSite] {
+        #if DEBUG
+        if uiFixtureMode { return UITestFixtures.resourceSites() }
+        #endif
+        let g=generation,api=try client(.moviepilot)
+        let rows=try await ReadBudget.run(seconds:readBudgetSeconds) { try await api.resourceSites() }
+        try validateReadGeneration(g)
+        return rows
+    }
+    func resourceDownloaders() async throws -> [MPResourceDownloader] {
+        #if DEBUG
+        if uiFixtureMode { return UITestFixtures.resourceDownloaders() }
+        #endif
+        let g=generation,api=try client(.moviepilot)
+        let rows=try await ReadBudget.run(seconds:readBudgetSeconds) { try await api.resourceDownloaders() }
+        try validateReadGeneration(g)
+        return rows
+    }
+    func resourceDirectories() async throws -> [MPResourceDirectory] {
+        let rows:[MPResourceDirectory]
+        #if DEBUG
+        if uiFixtureMode { rows=UITestFixtures.resourceDirectories() }
+        else {
+            let g=generation,api=try client(.moviepilot)
+            rows=try await ReadBudget.run(seconds:readBudgetSeconds) { try await api.resourceDirectories() }
+            try validateReadGeneration(g)
+        }
+        #else
+        let g=generation,api=try client(.moviepilot)
+        rows=try await ReadBudget.run(seconds:readBudgetSeconds) { try await api.resourceDirectories() }
+        try validateReadGeneration(g)
+        #endif
+        resourceDirectoryOptions=rows
+        preferences.validatePreferredDownloadDirectory(validIDs:Set(rows.map(\.id)),for:profile(.moviepilot).baseURL)
+        return rows
+    }
+    func loadResourceDirectories() async {
+        guard !resourceDirectoriesLoading && !locked else{return}
+        resourceDirectoriesLoading=true;defer{resourceDirectoriesLoading=false}
+        do { _=try await resourceDirectories();resourceDirectoriesError=nil }
+        catch { if !(error is CancellationError) { resourceDirectoriesError=Self.safeError(error) } }
+    }
+    func searchResources(query:String,sites:[String],media:MPDiscoveryItem? = nil,season:Int? = nil) async throws -> [MPResourceItem] {
+        #if DEBUG
+        if uiFixtureMode { return UITestFixtures.resourceSearch(query,sites:sites) }
+        #endif
+        let g=generation,api=try client(.moviepilot)
+        let rows=try await ReadBudget.run(seconds:150) { try await api.searchResources(query:query,sites:sites,media:media,season:season) }
+        try validateReadGeneration(g)
+        return rows
+    }
+    private func validateReadGeneration(_ g:Int) throws {
+        try Task.checkCancellation()
+        guard g == generation && !locked else{throw AppError.message("连接或锁定状态已变化，请重新读取。")}
+    }
+    func canDownloadResource(_ downloader:MPResourceDownloader)->Bool {
+        guard canManage(.moviepilot),downloader.targetBaseURL != nil,
+              let kind=preferences.boundDownloaderKind(for:downloader.bindingID,baseURL:profile(.moviepilot).baseURL),
+              downloader.compatibleKinds.contains(kind),canManage(kind) else{return false}
+        return true
+    }
+    @discardableResult func downloadResource(_ request:MPResourceDownloadRequest) async -> Bool {
+        do {
+            try guardAction(.moviepilot)
+            guard request.isValid,canDownloadResource(request.downloader),
+                  let kind=preferences.boundDownloaderKind(for:request.downloader.bindingID,baseURL:profile(.moviepilot).baseURL) else {
+                throw AppError.message("请先在设置中确认下载器对应关系并授权；只读锁和迁移保护仍然生效。")
+            }
+            actionInFlight=true;defer{actionInFlight=false}
+            let g=generation,target=profile(kind),api=try client(.moviepilot)
+            let ledger=ResourceDownloadLedger(defaults:defaults),key=ledger.key(profile:profile(.moviepilot),request:request,target:target)
+            if let previous=try ledger.record(key) {
+                throw AppError.message(previous.confirmedDownloadID == nil ? "该资源已有待核对的下载提交，请到原管理页核对，不会重复提交。" : "该资源已有下载提交记录，请在下载器中查看，不会重复添加。")
+            }
+            let id=try await api.downloadResource(request,authorize:{await self.resourceDownloadAllowed(request,generation:g,kind:kind,target:target)},beforeSend:{try await self.prepareResourceIntent(request,generation:g,kind:kind,target:target,key:key)})
+            guard resourceDownloadAllowed(request,generation:g,kind:kind,target:target) else {
+                throw AppError.message("下载可能已提交，连接或权限已变化。请只读核对原页面，勿重复提交。")
+            }
+            try ledger.confirm(key,id:id)
+            message="MoviePilot 已接受下载任务。请到下载器查看进度；这不表示文件已经下载完成。"
+            return true
+        } catch {message=Self.safeError(error);return false}
+    }
+    private func resourceDownloadAllowed(_ request:MPResourceDownloadRequest,generation:Int,kind:ServiceKind,target:ServiceProfile)->Bool {
+        self.generation == generation && !Task.isCancelled && canDownloadResource(request.downloader) &&
+        preferences.boundDownloaderKind(for:request.downloader.bindingID,baseURL:profile(.moviepilot).baseURL) == kind &&
+        profile(kind).baseURL == target.baseURL && profile(kind).username == target.username
+    }
+    private func prepareResourceIntent(_ request:MPResourceDownloadRequest,generation:Int,kind:ServiceKind,target:ServiceProfile,key:String) throws {
+        guard resourceDownloadAllowed(request,generation:generation,kind:kind,target:target) else{throw AppError.message("权限或目标已变化，下载未提交。")}
+        try ResourceDownloadLedger(defaults:defaults).prepare(key)
     }
     @discardableResult func createSubscription(_ request:MPSubscriptionRequest) async -> Bool {
         do {
@@ -310,5 +453,16 @@ import LocalAuthentication
         let g=generation
         do{let data=try await client(.emby).embyImage(id);guard generation == g && !locked else{return nil};posterCache.setObject(data as NSData,forKey:id as NSString,cost:data.count);return data}catch{return nil}
     }
-    func protectOnBackground() { generation &+= 1;if biometricEnabled { locked=true };clients=[:] }
+    func cancelDashboardRefresh() { dashboardJob?.cancel() }
+    func cancelDiscoveryRefresh() { discoveryJob?.cancel() }
+    private func resetReadJobs() {
+        dashboardJob?.cancel();discoveryJob?.cancel()
+        dashboardJob=nil;dashboardCycle=nil;discoveryJob=nil;discoveryCycle=nil
+        dashboardRefreshing=false;dashboardManualRefreshing=false;discoveryLoading=false
+    }
+    func protectOnBackground() {
+        generation &+= 1;discoverySearchGeneration &+= 1
+        dashboardJob?.cancel();discoveryJob?.cancel()
+        if biometricEnabled { locked=true };clients=[:]
+    }
 }

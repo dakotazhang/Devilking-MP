@@ -2,12 +2,28 @@ import SwiftUI
 import UIKit
 
 enum DKTheme {
-    static let background = Color(red: 0.035, green: 0.055, blue: 0.10)
-    static let card = Color(red: 0.075, green: 0.105, blue: 0.17)
-    static let accent = Color(red: 0.48, green: 0.79, blue: 1.0)
-    static let muted = Color(red: 0.57, green: 0.65, blue: 0.77)
-    static let green = Color(red: 0.43, green: 0.85, blue: 0.69)
-    static let amber = Color(red: 1.0, green: 0.76, blue: 0.38)
+    private static func adaptive(light: UIColor, dark: UIColor) -> Color {
+        Color(UIColor { $0.userInterfaceStyle == .dark ? dark : light })
+    }
+    static let background = adaptive(light: UIColor(red: 0.95, green: 0.96, blue: 0.98, alpha: 1), dark: UIColor(red: 0.035, green: 0.055, blue: 0.10, alpha: 1))
+    static let card = adaptive(light: .secondarySystemGroupedBackground, dark: UIColor(red: 0.075, green: 0.105, blue: 0.17, alpha: 1))
+    static let text = Color(uiColor: .label)
+    static let accent = adaptive(light: UIColor(red: 0.02, green: 0.40, blue: 0.70, alpha: 1), dark: UIColor(red: 0.48, green: 0.79, blue: 1.0, alpha: 1))
+    static let muted = Color(uiColor: .secondaryLabel)
+    static let green = adaptive(light: UIColor(red: 0.03, green: 0.45, blue: 0.30, alpha: 1), dark: UIColor(red: 0.43, green: 0.85, blue: 0.69, alpha: 1))
+    static let amber = adaptive(light: UIColor(red: 0.62, green: 0.35, blue: 0.0, alpha: 1), dark: UIColor(red: 1.0, green: 0.76, blue: 0.38, alpha: 1))
+}
+
+extension AppTheme {
+    var colorScheme: ColorScheme? {
+        switch self { case .system: return nil; case .light: return .light; case .dark: return .dark }
+    }
+}
+
+extension AppFontSize {
+    func dynamicTypeSize(system: DynamicTypeSize) -> DynamicTypeSize {
+        switch self { case .system: return system; case .large: return max(system, .xLarge); case .extraLarge: return max(system, .xxxLarge) }
+    }
 }
 
 extension ServiceKind {
@@ -30,7 +46,7 @@ struct DKCard<Content: View>: View {
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(DKTheme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 22).stroke(.white.opacity(0.055), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 22).stroke(DKTheme.muted.opacity(0.10), lineWidth: 1))
     }
 }
 
@@ -39,8 +55,8 @@ struct DKSectionTitle: View {
     var subtitle: String? = nil
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.title3.weight(.bold)).foregroundStyle(.white)
-            if let subtitle { Text(subtitle).font(.caption).foregroundStyle(DKTheme.muted) }
+            Text(LocalizedStringKey(title)).font(.title3.weight(.bold)).foregroundStyle(DKTheme.text)
+            if let subtitle { Text(LocalizedStringKey(subtitle)).font(.caption).foregroundStyle(DKTheme.muted) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -53,8 +69,8 @@ struct DKEmptyState: View {
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: symbol).font(.system(size: 32, weight: .light)).foregroundStyle(DKTheme.accent)
-            Text(title).font(.headline)
-            Text(detail).font(.subheadline).foregroundStyle(DKTheme.muted).multilineTextAlignment(.center)
+            Text(LocalizedStringKey(title)).font(.headline)
+            Text(LocalizedStringKey(detail)).font(.subheadline).foregroundStyle(DKTheme.muted).multilineTextAlignment(.center)
         }
         .padding(.vertical, 30)
         .padding(.horizontal, 12)
@@ -68,7 +84,7 @@ struct DKStatus: View {
     var body: some View {
         HStack(spacing: 5) {
             Circle().fill(color).frame(width: 6, height: 6)
-            Text(text).font(.caption.weight(.medium)).lineLimit(1)
+            Text(LocalizedStringKey(text)).font(.caption.weight(.medium)).lineLimit(1)
         }
         .foregroundStyle(color)
         .padding(.horizontal, 9).padding(.vertical, 5)
@@ -83,7 +99,7 @@ struct DKMetric: View {
     var color: Color = DKTheme.accent
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: symbol).font(.caption).foregroundStyle(DKTheme.muted)
+            Label(LocalizedStringKey(title), systemImage: symbol).font(.caption).foregroundStyle(DKTheme.muted)
             Text(value).font(.title3.weight(.semibold)).monospacedDigit().foregroundStyle(color)
                 .lineLimit(1).minimumScaleFactor(0.65)
         }
@@ -96,9 +112,9 @@ struct DKInfoRow: View {
     let value: String
     var body: some View {
         HStack(alignment: .top, spacing: 18) {
-            Text(title).font(.subheadline).foregroundStyle(DKTheme.muted)
+            Text(LocalizedStringKey(title)).font(.subheadline).foregroundStyle(DKTheme.muted)
             Spacer(minLength: 0)
-            Text(value.isEmpty ? "—" : value).font(.subheadline).multilineTextAlignment(.trailing)
+            Text(LocalizedStringKey(value.isEmpty ? "—" : value)).font(.subheadline).multilineTextAlignment(.trailing)
                 .textSelection(.enabled)
         }
     }
@@ -169,7 +185,7 @@ struct DKServiceLink: View {
     var title: String = "打开原管理页面"
     var body: some View {
         if let url = model.webURL(kind) {
-            Button { openURL(url) } label: { Label(title, systemImage: "arrow.up.right.square") }
+            Button { openURL(url) } label: { Label(LocalizedStringKey(title), systemImage: "arrow.up.right.square") }
                 .font(.subheadline.weight(.medium)).foregroundStyle(DKTheme.accent)
         }
     }

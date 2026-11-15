@@ -14,7 +14,7 @@ actor APIClient {
         if let session=session { self.session=session }
         else {
             let cfg=URLSessionConfiguration.ephemeral
-            cfg.timeoutIntervalForRequest=18;cfg.timeoutIntervalForResource=30
+            cfg.timeoutIntervalForRequest=18;cfg.timeoutIntervalForResource=150
             cfg.urlCache=nil;cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
             cfg.waitsForConnectivity=false
             self.session=URLSession(configuration:cfg,delegate:SameOriginDelegate(),delegateQueue:nil)
@@ -38,14 +38,17 @@ actor APIClient {
         if !query.isEmpty { c.queryItems=query.sorted{$0.key < $1.key}.map{URLQueryItem(name:$0.key,value:$0.value)} }
         guard let url=c.url else { throw AppError.message("服务地址无效。") };return url
     }
-    private func request(_ path:String, method:String="GET", query:[String:String]=[:], form:[String:String]?=nil, json:Any?=nil, headers:[String:String]=[:]) async throws -> (Data,HTTPURLResponse) {
+    private func request(_ path:String, method:String="GET", query:[String:String]=[:], form:[String:String]?=nil, json:Any?=nil, headers:[String:String]=[:], timeout:TimeInterval?=nil) async throws -> (Data,HTTPURLResponse) {
+        try Task.checkCancellation()
         var r=URLRequest(url:try endpoint(path,query:query));r.httpMethod=method
+        if let timeout=timeout { r.timeoutInterval=timeout }
         r.setValue("application/json",forHTTPHeaderField:"Accept")
         if let form=form { r.httpBody=Self.form(form);r.setValue("application/x-www-form-urlencoded",forHTTPHeaderField:"Content-Type") }
         if let json=json { r.httpBody=try JSONSerialization.data(withJSONObject:json);r.setValue("application/json",forHTTPHeaderField:"Content-Type") }
         if (profile.kind == .qb1 || profile.kind == .qb2) && !credentials.apiKey.isEmpty { r.setValue("Bearer "+credentials.apiKey,forHTTPHeaderField:"Authorization") }
         for (k,v) in headers { r.setValue(v,forHTTPHeaderField:k) }
         let (data,response)=try await session.data(for:r)
+        try Task.checkCancellation()
         guard let http=response as? HTTPURLResponse else { throw AppError.message("服务响应无效。") }
         return (data,http)
     }
@@ -95,6 +98,30 @@ actor APIClient {
         }
         loggedIn=true
     }
+    func prepareReadSession() async throws { try Task.checkCancellation(); try await login() }
+
+    /// Preserves the success envelope and permits one bounded resource search.
+    /// Mutation callers must pass both a current authorization check and a durable intent hook.
+    func moviePilotResponse(_ path:String, method:String="GET", query:[String:String]=[:], json:[String:Any]?=nil,
+                            timeout:TimeInterval=18, authorize:(@Sendable () async -> Bool)?=nil,
+                            beforeSend:(@Sendable () async throws -> Void)?=nil) async throws -> [String:Any] {
+        guard profile.kind == .moviepilot else { throw AppError.message("当前服务不是 MoviePilot。") }
+        if method != "GET" {
+            guard let authorize=authorize, beforeSend != nil, await authorize() else { throw AppError.message("当前只读或权限已变化，下载未提交。") }
+        }
+        try await login(); try Task.checkCancellation()
+        if method != "GET" {
+            guard let authorize=authorize, let beforeSend=beforeSend, await authorize() else { throw AppError.message("管理权限或连接已变化，下载未提交。") }
+            try await beforeSend()
+            try Task.checkCancellation()
+            guard await authorize() else { throw AppError.message("权限已变化，请核对原管理页；未自动重试。") }
+        }
+        let headers=credentials.apiKey.isEmpty ? ["Authorization":"Bearer "+token]:["X-API-KEY":credentials.apiKey]
+        let (data,response)=try await request(path,method:method,query:query,json:json,headers:headers,timeout:timeout)
+        try check(response)
+        guard let value=try decode(data) as? [String:Any], value["success"] is Bool else { throw AppError.message("MoviePilot 响应缺少业务结果，未自动重试。") }
+        return value
+    }
     private func origin(_ u:URL)->String { var c=URLComponents();c.scheme=u.scheme;c.host=u.host;c.port=u.port;return c.string ?? "" }
     func get(_ path:String,query:[String:String]=[:]) async throws -> Any {
         try await login();var headers=[String:String]()
@@ -113,6 +140,7 @@ actor APIClient {
     func rpc(_ method:String,args:[String:Any]=[:],authorize:(@Sendable () async -> Bool)?=nil) async throws -> [String:Any] {
         let basic=Data((credentials.username+":"+credentials.password).utf8).base64EncodedString()
         for challenge in 0...1 {
+            try Task.checkCancellation()
             if let authorize=authorize, !(await authorize()) { throw AppError.message("管理权限或连接已变化，操作已取消。") }
             var h=["Authorization":"Basic "+basic];if !trSession.isEmpty { h["X-Transmission-Session-Id"]=trSession }
             let (d,r)=try await request("/transmission/rpc",method:"POST",json:["method":method,"arguments":args],headers:h)

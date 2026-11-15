@@ -72,6 +72,7 @@ import Foundation
     }
 
     static func sections() -> [MPDiscoverySection] {
+        if ProcessInfo.processInfo.arguments.contains("--ui-fixture-empty-discovery") { return [] }
         let media = catalog()
         return [
             MPDiscoverySection(id: "fixture-showing", title: "豆瓣正在热映", subtitle: "合成资料 · 仅供界面测试", category: .movie, items: Array(media.prefix(2))),
@@ -108,6 +109,36 @@ import Foundation
     static func sites() -> [SiteAccount] {
         [SiteAccount(id: "fixture-site", name: "合成站点", uploaded: 2_000_000_000_000, downloaded: 300_000_000_000,
                      ratio: 6.67, seeding: 128, enabled: true, hasData: true, status: "合成缓存，非真实账号")]
+    }
+
+    static func resourceSites() -> [MPResourceSite] {
+        [MPResourceSite(id: "1", name: "合成站点 A"), MPResourceSite(id: "2", name: "合成站点 B")]
+    }
+
+    static func resourceDownloaders() -> [MPResourceDownloader] {
+        [MPResourceDownloader(id: "合成主力下载器", name: "合成主力下载器", type: "qbittorrent", targetBaseURL: "https://fixture.invalid/qb1"),
+         MPResourceDownloader(id: "合成备用下载器", name: "合成备用下载器", type: "qbittorrent", targetBaseURL: "https://fixture.invalid/qb2"),
+         MPResourceDownloader(id: "合成长保下载器", name: "合成长保下载器", type: "transmission", targetBaseURL: "https://fixture.invalid/tr")]
+    }
+
+    static func resourceDirectories() -> [MPResourceDirectory] {
+        [MPResourceDirectory(id: "fixture-movies", name: "合成电影目录", savePath: "/synthetic/movies"),
+         MPResourceDirectory(id: "fixture-tv", name: "合成剧集目录", savePath: "/synthetic/tv")]
+    }
+
+    static func resourceSearch(_ query: String, sites: [String]) -> [MPResourceItem] {
+        let media: [String: Any] = ["media_source": "themoviedb", "media_id": "990001", "tmdb_id": "990001", "title": "合成电影：星海远航", "type": "电影", "year": "2026"]
+        let candidates: [[String: Any]] = [
+            ["site": 1, "site_name": "合成站点 A", "title": "合成电影.星海远航.2026.2160p.WEB-DL", "description": "完全虚构的界面样本 · 4K HDR",
+             "size": 24_000_000_000, "seeders": 32, "peers": 2, "downloadvolumefactor": 0, "uploadvolumefactor": 1, "hit_and_run": false,
+             "freedate": "2099-12-31 23:59:59", "page_url": "https://tracker.example/details.php?id=12345", "enclosure": "https://tracker.example/download.php?id=12345"],
+            ["site": 2, "site_name": "合成站点 B", "title": "合成电影.星海远航.2026.1080p.BluRay", "description": "完全虚构的界面样本 · 未知促销和 HR",
+             "size": 12_000_000_000, "seeders": 18, "peers": 0,
+             "page_url": "https://tracker.example/details.php?id=22345", "enclosure": "https://tracker.example/download.php?id=22345"]
+        ]
+        return candidates.filter { sites.contains(String(describing: $0["site"] ?? "")) }
+            .compactMap { MPResourceParser.item(["media_info": media, "torrent_info": $0]) }
+            .filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || query == "合成电影：星海远航" }
     }
 
     private static func catalog() -> [MPDiscoveryItem] {

@@ -12,6 +12,7 @@ struct MPDiscoveryDetailView: View {
     @State private var submitting = false
     @State private var attemptedKeys = Set<String>()
     @State private var submittedKeys = Set<String>()
+    @State private var showingResources = false
 
     private var current: MPDiscoveryItem { detail?.item ?? item }
     private var request: MPSubscriptionRequest { MPSubscriptionRequest(item: current, season: current.isTV ? selectedSeason : nil) }
@@ -60,10 +61,19 @@ struct MPDiscoveryDetailView: View {
                     }
                     if current.isTV { seasonSelection }
                     subscriptionAction
+                    resourceAction
                 }.padding(20)
             }
             .navigationBarHidden(true)
             .task(id: item.id) { await loadDetail() }
+            .sheet(isPresented: $showingResources) {
+                NavigationStack {
+                    MPResourceSearchView(media: current, season: selectedSeason)
+                        .navigationTitle("站点资源")
+                        .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("完成") { showingResources = false } } }
+                        .dkScreen()
+                }
+            }
             .interactiveDismissDisabled(submitting)
             .alert("确认新增订阅？", isPresented: Binding(get: { confirmingRequest != nil }, set: { if !$0 { confirmingRequest = nil } }), presenting: confirmingRequest) { confirmed in
                 Button("取消", role: .cancel) {}
@@ -72,7 +82,7 @@ struct MPDiscoveryDetailView: View {
                 Text("\(confirmed.item.title)\n\(confirmed.item.metadataLine)\(confirmed.item.isTV ? " · " + seasonTitle(confirmed.season) : "")\nMoviePilot 将按现有订阅规则自动搜索并下载匹配资源。只提交这一条订阅。")
             }
             .dkScreen()
-        }.tint(DKTheme.accent).preferredColorScheme(.dark)
+        }.tint(DKTheme.accent)
     }
 
     private var seasonSelection: some View {
@@ -110,9 +120,11 @@ struct MPDiscoveryDetailView: View {
                 Button { confirmingRequest = request } label: {
                     HStack {
                         if submitting { ProgressView() }
-                        Label(submitting ? "正在提交" : "订阅这部作品", systemImage: "bookmark.badge.plus")
+                        Label(submitting ? "正在提交" : "按默认规则订阅", systemImage: "bookmark.badge.plus")
                     }.font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
                 }.buttonStyle(.borderedProminent).disabled(!canSubmit).accessibilityIdentifier("media.subscribe")
+                Text("沿用 MoviePilot 电脑端的订阅规则，由它自动挑选匹配资源。")
+                    .font(.caption).foregroundStyle(DKTheme.muted)
                 if !model.canManage(.moviepilot) {
                     Label("当前仅查看。请在设置中启用 MoviePilot 操作权限后再订阅。", systemImage: "lock")
                         .font(.caption).foregroundStyle(DKTheme.amber).accessibilityIdentifier("media.detail.readonly")
@@ -124,6 +136,20 @@ struct MPDiscoveryDetailView: View {
                 }
             }
             DKServiceLink(kind: .moviepilot, title: "打开 MoviePilot")
+        }
+    }
+
+    private var resourceAction: some View {
+        DKCard {
+            DKSectionTitle(title: "自己挑选具体资源", subtitle: "选择已连接的 PT 站点，查看种子后再决定下载。")
+            Button { showingResources = true } label: {
+                Label("搜索站点资源", systemImage: "magnifyingglass").frame(maxWidth: .infinity).padding(.vertical, 6)
+            }.buttonStyle(.bordered)
+                .disabled(loading || submitting || (current.isTV && selectedSeason == nil))
+                .accessibilityIdentifier("media.searchResources")
+            if current.isTV && selectedSeason == nil {
+                Text("请先选择要查找的剧集季。") .font(.caption).foregroundStyle(DKTheme.muted)
+            }
         }
     }
 

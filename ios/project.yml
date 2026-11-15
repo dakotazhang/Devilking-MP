@@ -39,7 +39,7 @@ targets:
         PRODUCT_NAME: DevilkingMP
         INFOPLIST_FILE: DevilkingMP/Info.plist
         GENERATE_INFOPLIST_FILE: NO
-        MARKETING_VERSION: "1.1.0"
+        MARKETING_VERSION: "1.2.0"
         CURRENT_PROJECT_VERSION: "2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
@@ -60,6 +60,9 @@ targets:
       - path: ../tests/DiscoveryTests.swift
       - path: ../tests/ReadOnlyRegressionTests.swift
       - path: ../tests/SubscriptionLedgerTests.swift
+      - path: ../tests/AppPreferencesTests.swift
+      - path: ../tests/ResourceSearchTests.swift
+      - path: ../tests/RefreshRegressionTests.swift
     dependencies:
       - target: DevilkingMP
     settings:

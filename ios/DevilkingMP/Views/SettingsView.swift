@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var preferences: AppPreferences
     @State private var editingService: ServiceKind?
     @State private var importing = false
     @State private var confirmingMigrationUnlock = false
@@ -15,7 +16,9 @@ struct SettingsView: View {
             ScrollView {
                 VStack(spacing: 20) {
                     accountHeader
-                    connections
+                    resources
+                    appearance
+                    dashboardModules
                     protection
                     privacy
                     about
@@ -87,14 +90,14 @@ struct SettingsView: View {
                         HStack(spacing: 12) {
                             Image(systemName: kind.symbol).font(.title2).foregroundStyle(DKTheme.accent).frame(width: 32)
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(kind.compactTitle).font(.headline).foregroundStyle(.white)
-                                Text(connectionDescription(kind)).font(.caption).foregroundStyle(DKTheme.muted).lineLimit(1)
+                                Text(LocalizedStringKey(kind.compactTitle)).font(.headline).foregroundStyle(DKTheme.text)
+                                Text(LocalizedStringKey(connectionDescription(kind))).font(.caption).foregroundStyle(DKTheme.muted).lineLimit(1)
                             }
                             Spacer(minLength: 0)
                             VStack(alignment: .trailing, spacing: 6) {
-                                Text(model.isConfigured(kind) ? "已配置" : "添加连接").font(.caption).foregroundStyle(model.isConfigured(kind) ? DKTheme.green : DKTheme.accent)
+                                Text(LocalizedStringKey(model.isConfigured(kind) ? "已配置" : "添加连接")).font(.caption).foregroundStyle(model.isConfigured(kind) ? DKTheme.green : DKTheme.accent)
                                 if model.isConfigured(kind) {
-                                    Text(model.canManage(kind) ? "可管理" : model.profile(kind).allowActions ? "权限已保存 · 当前只读" : "仅查看").font(.caption2).foregroundStyle(DKTheme.muted)
+                                    Text(LocalizedStringKey(model.canManage(kind) ? "可管理" : model.profile(kind).allowActions ? "权限已保存 · 当前只读" : "仅查看")).font(.caption2).foregroundStyle(DKTheme.muted)
                                 }
                             }
                             Image(systemName: "chevron.right").font(.caption2).foregroundStyle(DKTheme.muted)
@@ -102,6 +105,66 @@ struct SettingsView: View {
                     }
                 }.buttonStyle(.plain)
             }
+        }
+    }
+
+    private var resources: some View {
+        DKCard {
+            DKSectionTitle(title: "资源管理")
+            NavigationLink {
+                ScrollView { connections.padding(18) }
+                    .navigationTitle("服务器设置").navigationBarTitleDisplayMode(.inline).dkScreen()
+            } label: { Label("服务器设置", systemImage: "server.rack").frame(minHeight: 36) }
+            Divider()
+            NavigationLink { DownloadDirectorySettingsView() } label: {
+                Label("预设下载目录", systemImage: "folder.fill").frame(minHeight: 36)
+            }
+            Divider()
+            NavigationLink { DownloaderBindingsSettingsView() } label: {
+                Label("MP 下载器对应关系", systemImage: "link").frame(minHeight: 36)
+            }
+            Divider()
+            Picker(selection: $preferences.refreshInterval) {
+                Text("关闭自动刷新").tag(0)
+                Text("15 秒").tag(15)
+                Text("30 秒").tag(30)
+                Text("60 秒").tag(60)
+                Text("120 秒").tag(120)
+            } label: { Label("数据刷新频率", systemImage: "arrow.clockwise") }
+                .accessibilityIdentifier("settings.refreshInterval")
+            Text("仅在 App 前台刷新仪表盘与当前下载器列表；关闭后仍可手动刷新。发现页下拉刷新，搜索结果不会被定时刷新覆盖。")
+                .font(.caption).foregroundStyle(DKTheme.muted)
+        }
+    }
+
+    private var appearance: some View {
+        DKCard {
+            DKSectionTitle(title: "应用设置")
+            Picker("外观主题", selection: $preferences.theme) {
+                ForEach(AppTheme.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
+            }.accessibilityIdentifier("settings.theme")
+            Picker("应用语言", selection: $preferences.language) {
+                ForEach(AppLanguage.allCases) { Text(verbatim: $0.title).tag($0) }
+            }.accessibilityIdentifier("settings.language")
+            Text("界面支持简体中文、繁體中文与 English；影片名称、站点与服务返回的内容保留原文。")
+                .font(.caption).foregroundStyle(DKTheme.muted)
+            Picker("字体大小", selection: $preferences.fontSize) {
+                ForEach(AppFontSize.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
+            }.accessibilityIdentifier("settings.fontSize")
+            Text("放大文字不会缩小系统辅助功能字体。")
+                .font(.caption).foregroundStyle(DKTheme.muted)
+        }
+    }
+
+    private var dashboardModules: some View {
+        DKCard {
+            DKSectionTitle(title: "仪表盘定制", subtitle: "模块展示")
+            ForEach(DashboardModule.allCases) { module in
+                Toggle(LocalizedStringKey(module.title), isOn: Binding(get: { preferences.isVisible(module) }, set: { preferences.setVisible(module, $0) }))
+                    .tint(DKTheme.accent).accessibilityIdentifier("settings.module.\(module.rawValue)")
+            }
+            Text("只改变本机仪表盘展示，不影响服务运行或下载任务。")
+                .font(.caption).foregroundStyle(DKTheme.muted)
         }
     }
 
@@ -170,8 +233,140 @@ struct SettingsView: View {
     }
 }
 
+private struct DownloaderBindingsSettingsView: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var preferences: AppPreferences
+    @State private var downloaders: [MPResourceDownloader] = []
+    @State private var loading = false
+    @State private var loadError: String?
+    private var baseURL: String { model.profile(.moviepilot).baseURL }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("请将 MoviePilot 中的下载器，明确对应到 App 已配置的同一个下载器。名称和地址可能不同，请核对后选择；未绑定的下载器不能从 App 发起下载。")
+                    .font(.subheadline).foregroundStyle(DKTheme.muted)
+                ForEach(downloaders) { downloader in
+                    DKCard {
+                        Text(downloader.name).font(.headline)
+                        Text(downloader.type).font(.caption).foregroundStyle(DKTheme.muted)
+                        if let endpoint = downloader.targetBaseURL {
+                            Text(endpoint).font(.caption).foregroundStyle(DKTheme.muted).textSelection(.enabled)
+                        }
+                        Picker("对应 App 下载器", selection: Binding<ServiceKind?>(get: {
+                            preferences.boundDownloaderKind(for: downloader.bindingID, baseURL: baseURL)
+                        }, set: {
+                            preferences.setBoundDownloaderKind($0, for: downloader.bindingID, baseURL: baseURL)
+                        })) {
+                            Text("未绑定").tag(ServiceKind?.none)
+                            ForEach(availableKinds(for: downloader)) { kind in
+                                Text(LocalizedStringKey(kind.compactTitle)).tag(Optional(kind))
+                            }
+                        }
+                        if availableKinds(for: downloader).isEmpty {
+                            Text("请先配置与该类型相符的下载器连接。")
+                                .font(.caption).foregroundStyle(DKTheme.amber)
+                        }
+                    }
+                }
+                if let loadError { Text(loadError).font(.caption).foregroundStyle(DKTheme.amber) }
+                Button { Task { await load() } } label: {
+                    HStack {
+                        if loading { ProgressView().controlSize(.small) }
+                        Label("读取 MP 下载器", systemImage: "arrow.clockwise")
+                    }
+                }.buttonStyle(.bordered).disabled(loading || model.locked || !model.isConfigured(.moviepilot))
+                Text("对应关系仅存本机，不改 MoviePilot 的下载器设置。下载仍遵守全局只读锁、服务操作权限和迁移保护。重新保存 MP 连接后需要重新确认。")
+                    .font(.caption).foregroundStyle(DKTheme.muted)
+            }.padding(18)
+        }
+        .navigationTitle("MP 下载器对应关系").navigationBarTitleDisplayMode(.inline).dkScreen()
+        .task { await load() }.refreshable { await load() }
+    }
+
+    private func availableKinds(for downloader: MPResourceDownloader) -> [ServiceKind] {
+        guard downloader.canBind else { return [] }
+        let kinds: [ServiceKind]
+        switch downloader.type.lowercased() {
+        case "qbittorrent": kinds = [.qb1, .qb2]
+        case "transmission": kinds = [.tr]
+        default: kinds = []
+        }
+        return kinds.filter { model.isConfigured($0) }
+    }
+
+    private func load() async {
+        guard !loading, !model.locked, model.isConfigured(.moviepilot) else { return }
+        loading = true; loadError = nil
+        let requestedBaseURL = baseURL
+        defer { loading = false }
+        do {
+            let result = try await model.resourceDownloaders()
+            guard !Task.isCancelled, requestedBaseURL == baseURL, !model.locked else { return }
+            downloaders = result
+        } catch { loadError = AppModel.safeError(error) }
+    }
+}
+
+private struct DownloadDirectorySettingsView: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var preferences: AppPreferences
+
+    private var baseURL: String { model.profile(.moviepilot).baseURL }
+    private var selection: String? { preferences.preferredDownloadDirectoryID(for: baseURL) }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                DKCard {
+                    DKSectionTitle(title: "预设下载目录")
+                    Text("默认沿用已连接 MoviePilot 的下载目录。此处仅保存本机选择，不会修改 MoviePilot 配置；下载前仍可单次另选。")
+                        .font(.subheadline).foregroundStyle(DKTheme.muted)
+                    directoryRow(id: nil, name: preferences.text("沿用 MoviePilot 默认目录"), path: nil)
+                    ForEach(model.resourceDirectoryOptions) { directory in
+                        Divider()
+                        directoryRow(id: directory.id, name: directory.name, path: directory.savePath)
+                    }
+                    if let error = model.resourceDirectoriesError {
+                        Text(error).font(.caption).foregroundStyle(DKTheme.amber)
+                    } else if !model.resourceDirectoriesLoading && model.resourceDirectoryOptions.isEmpty {
+                        Text("MoviePilot 未返回可选目录，下载时沿用其默认配置。")
+                            .font(.caption).foregroundStyle(DKTheme.muted)
+                    }
+                    Button { Task { await model.loadResourceDirectories() } } label: {
+                        HStack {
+                            if model.resourceDirectoriesLoading { ProgressView().controlSize(.small) }
+                            Label("读取 MoviePilot 下载目录", systemImage: "arrow.clockwise")
+                        }
+                    }.buttonStyle(.bordered).disabled(!model.isConfigured(.moviepilot) || model.locked || model.resourceDirectoriesLoading)
+                }
+                Text("切换 MoviePilot 连接时不会沿用其他服务器的目录。若目录被移除，会恢复为 MoviePilot 默认目录。")
+                    .font(.caption).foregroundStyle(DKTheme.muted)
+            }.padding(18)
+        }
+        .navigationTitle("预设下载目录").navigationBarTitleDisplayMode(.inline).dkScreen()
+        .task { await model.loadResourceDirectories() }
+        .refreshable { await model.loadResourceDirectories() }
+    }
+
+    private func directoryRow(id: String?, name: String, path: String?) -> some View {
+        Button { preferences.setPreferredDownloadDirectoryID(id, for: baseURL) } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(name).foregroundStyle(DKTheme.text).multilineTextAlignment(.leading)
+                    if let path { Text(path).font(.caption).foregroundStyle(DKTheme.muted).multilineTextAlignment(.leading).textSelection(.enabled) }
+                }
+                Spacer(minLength: 8)
+                if selection == id { Image(systemName: "checkmark.circle.fill").foregroundStyle(DKTheme.accent) }
+            }.frame(minHeight: 44)
+        }.buttonStyle(.plain).disabled(model.locked)
+            .accessibilityAddTraits(selection == id ? .isSelected : [])
+    }
+}
+
 private struct ConnectionEditorView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var preferences: AppPreferences
     @Environment(\.dismiss) private var dismiss
     let kind: ServiceKind
     @State private var address = ""
@@ -195,7 +390,7 @@ private struct ConnectionEditorView: View {
                         .accessibilityLabel("服务完整地址")
                     Text("填写 http:// 或 https:// 开头的完整地址。家庭内网与 VPN 使用相同地址即可。")
                         .font(.caption).foregroundStyle(DKTheme.muted)
-                } header: { Text("\(kind.compactTitle) · 连接地址") }
+                } header: { Text(preferences.text(kind.compactTitle) + " · " + preferences.text("连接地址")) }
 
                 Section("身份凭据") {
                     TextField("用户名", text: $username).textContentType(.username)
@@ -205,7 +400,7 @@ private struct ConnectionEditorView: View {
                         SecureField("API Key / Token（可选）", text: $apiKey)
                             .textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive()
                     }
-                    Text(supportsAPIKey ? "可使用账号密码，或服务支持的 API Key。凭据保存在本机钥匙串中。" : "账号密码仅存本机钥匙串，不包含在普通连接设置中。")
+                    Text(LocalizedStringKey(supportsAPIKey ? "可使用账号密码，或服务支持的 API Key。凭据保存在本机钥匙串中。" : "账号密码仅存本机钥匙串，不包含在普通连接设置中。"))
                         .font(.caption).foregroundStyle(DKTheme.muted)
                 }
 
@@ -213,7 +408,7 @@ private struct ConnectionEditorView: View {
                     Toggle(isOn: Binding(get: { allowActions }, set: { enabled in
                         if enabled { confirmingActions = true } else { allowActions = false }
                     })) { Text("允许从 App 操作此服务") }.tint(DKTheme.accent)
-                    Text(permissionDescription).font(.caption).foregroundStyle(DKTheme.muted)
+                    Text(LocalizedStringKey(permissionDescription)).font(.caption).foregroundStyle(DKTheme.muted)
                     if model.readOnlyMode {
                         Label("全局只读锁已开启，保存此授权后仍保持只读。", systemImage: "lock.fill")
                             .font(.caption).foregroundStyle(DKTheme.amber)
@@ -236,21 +431,21 @@ private struct ConnectionEditorView: View {
                 }
             }
             .scrollContentBackground(.hidden).background(DKTheme.background)
-            .navigationTitle(kind.compactTitle).navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(Text(LocalizedStringKey(kind.compactTitle))).navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
             .onAppear(perform: load)
             .alert("启用此服务的操作权限？", isPresented: $confirmingActions) {
                 Button("保持只读", role: .cancel) {}
                 Button("允许操作") { allowActions = true }
-            } message: { Text("\(permissionDescription)\n每次实际操作仍需确认。此授权将在保存连接后生效。") }
+            } message: { Text(preferences.text(permissionDescription) + "\n" + preferences.text("每次实际操作仍需确认。此授权将在保存连接后生效。")) }
             .alert("清除此连接？", isPresented: $confirmingDisconnect) {
                 Button("取消", role: .cancel) {}
                 Button("清除本机配置", role: .destructive) { model.disconnect(kind); dismiss() }
-            } message: { Text("\(kind.compactTitle) 的本机凭据会从钥匙串中移除；服务器上的数据保留。") }
+            } message: { Text(preferences.text(kind.compactTitle) + "\n" + preferences.text("本机凭据会从钥匙串中移除；服务器上的数据保留。")) }
             .alert("连接未保存", isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
                 Button("知道了", role: .cancel) { saveError = nil }
             } message: { Text(saveError ?? "") }
-        }.tint(DKTheme.accent).preferredColorScheme(.dark)
+        }.tint(DKTheme.accent)
     }
 
     private var permissionDescription: String {

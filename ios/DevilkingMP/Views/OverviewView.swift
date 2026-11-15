@@ -2,6 +2,7 @@ import SwiftUI
 
 struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var preferences: AppPreferences
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let openSettings: () -> Void
@@ -24,17 +25,19 @@ struct OverviewView: View {
                         if configuredKinds.isEmpty {
                             firstRun
                         } else {
-                            traffic(aggregate)
-                            taskOverview(aggregate)
+                            if preferences.isVisible(.traffic) { traffic(aggregate) }
+                            if preferences.isVisible(.tasks) { taskOverview(aggregate) }
                             if model.migrationProtection { DKProtectionNotice(compact: true) }
-                            DKSectionTitle(title: "下载器状态", subtitle: "点开查看任务与筛选；每个服务独立读取。")
-                            ForEach(configuredKinds) { kind in
-                                DownloaderDashboardCard(kind: kind, snapshot: model.dashboardSnapshots[kind], now: context.date) {
-                                    openDownloaders(kind, .all)
+                            if preferences.isVisible(.services) {
+                                DKSectionTitle(title: "下载器状态", subtitle: "点开查看任务与筛选；每个服务独立读取。")
+                                ForEach(configuredKinds) { kind in
+                                    DownloaderDashboardCard(kind: kind, snapshot: model.dashboardSnapshots[kind], now: context.date) {
+                                        openDownloaders(kind, .all)
+                                    }
                                 }
                             }
-                            storage(now: context.date)
-                            serviceEntrances
+                            if preferences.isVisible(.storage) { storage(now: context.date) }
+                            if preferences.isVisible(.services) { serviceEntrances }
                         }
                     }.padding(18)
                 }
@@ -43,17 +46,21 @@ struct OverviewView: View {
             .navigationTitle("仪表盘")
             .navigationBarTitleDisplayMode(.inline)
             .dkScreen()
-            .task {
-                await model.refreshDashboard()
-                while !Task.isCancelled {
-                    do { try await Task.sleep(nanoseconds: 60_000_000_000) } catch { return }
-                    if scenePhase == .active && !model.locked && !model.dashboardRefreshing {
-                        await model.refreshDashboard()
-                    }
+            .task(id: refreshScheduleID) {
+                guard scenePhase == .active && !model.locked else{return}
+                await model.refreshDashboard(manual:false)
+                guard preferences.refreshInterval > 0 else{return}
+                while !Task.isCancelled && scenePhase == .active && !model.locked {
+                    do { try await Task.sleep(nanoseconds:UInt64(preferences.refreshInterval)*1_000_000_000) } catch { return }
+                    guard !Task.isCancelled else{return}
+                    await model.refreshDashboard(manual:false)
                 }
             }
+            .onDisappear { model.cancelDashboardRefresh() }
         }
     }
+
+    private var refreshScheduleID:String { "\(preferences.refreshInterval)-\(scenePhase == .active)-\(model.locked)" }
 
     private var refreshHeader: some View {
         ViewThatFits(in: .horizontal) {
@@ -64,18 +71,19 @@ struct OverviewView: View {
     private var headerTitle: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text("家庭下载与保种").font(.title2.weight(.bold))
-            Text("前台每分钟更新 · 默认只读").font(.caption).foregroundStyle(DKTheme.muted)
+            Text(preferences.refreshInterval == 0 ? "仅手动刷新 · 默认只读" : "前台每\(preferences.refreshInterval)秒更新 · 默认只读")
+                .font(.caption).foregroundStyle(DKTheme.muted)
         }
     }
     private var refreshButton: some View {
         Button { Task { await model.refreshDashboard() } } label: {
             HStack(spacing: 7) {
-                if model.dashboardRefreshing { ProgressView().controlSize(.small) }
+                if model.dashboardManualRefreshing { ProgressView().controlSize(.small) }
                 else { Image(systemName: "arrow.clockwise") }
-                Text(model.dashboardRefreshing ? "更新中" : "刷新")
+                Text(model.dashboardManualRefreshing ? "更新中" : "刷新")
             }.font(.subheadline.weight(.semibold)).padding(.horizontal, 10).frame(minHeight: 44)
         }.buttonStyle(.bordered)
-        .disabled(model.dashboardRefreshing || model.locked || configuredKinds.isEmpty)
+        .disabled(model.dashboardManualRefreshing || model.locked || configuredKinds.isEmpty)
         .accessibilityLabel("刷新仪表盘，只读取下载器状态")
         .accessibilityIdentifier("dashboard.refresh")
     }
@@ -202,7 +210,7 @@ private struct DownloaderDashboardCard: View {
                 HStack(alignment: .top, spacing: 12) {
                     Image(systemName: kind.symbol).font(.title2).foregroundStyle(DKTheme.accent)
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(kind.compactTitle).font(.headline).foregroundStyle(.white)
+                        Text(kind.compactTitle).font(.headline).foregroundStyle(DKTheme.text)
                         Text(kind.subtitle).font(.caption).foregroundStyle(DKTheme.muted)
                     }
                     Spacer(minLength: 0)

@@ -108,7 +108,7 @@ struct EmbyView: View {
                 .font(.caption).padding(7).background(.black.opacity(0.6), in: Capsule()).padding(7)
                 .opacity(item.favorite || item.played ? 1 : 0)
             }
-            Text(item.title).font(.subheadline.weight(.medium)).foregroundStyle(.white).lineLimit(2)
+            Text(item.title).font(.subheadline.weight(.medium)).foregroundStyle(DKTheme.text).lineLimit(2)
                 .frame(height: 40, alignment: .topLeading)
             Text(item.detail).font(.caption2).foregroundStyle(DKTheme.muted).lineLimit(1)
         }.frame(width: 135, alignment: .leading)

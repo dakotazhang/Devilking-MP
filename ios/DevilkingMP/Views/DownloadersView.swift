@@ -260,7 +260,7 @@ private struct TorrentTaskRow: View {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: task.verification != nil ? "checkmark.shield" : task.isStopped ? "pause.circle" : task.isComplete ? "arrow.up.circle" : "arrow.down.circle")
                     .font(.title3).foregroundStyle(!isCurrent || task.isStopped ? DKTheme.muted : task.isComplete ? DKTheme.green : DKTheme.accent)
-                Text(task.name).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                Text(task.name).font(.subheadline.weight(.semibold)).foregroundStyle(DKTheme.text).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                 Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(DKTheme.muted)
             }
             ProgressView(value: progress).tint(task.verification != nil ? DKTheme.amber : DKTheme.accent)
@@ -342,7 +342,7 @@ private struct TaskDetailView: View {
                 }
             } message: { Text("\(task.kind.compactTitle)\n\(task.name)\n操作前会重新核对任务；失败不会自动重试。") }
             .dkScreen()
-        }.tint(DKTheme.accent).preferredColorScheme(.dark)
+        }.tint(DKTheme.accent)
     }
 }
 
@@ -385,6 +385,6 @@ private struct UploadLimitView: View {
                     Task { await model.setUploadLimit(kind, mbps: value); dismiss() }
                 }
             } message: { Text("\(kind.compactTitle)：\(input) Mbps。此次写入失败后不会自动重试。") }
-        }.tint(DKTheme.accent).preferredColorScheme(.dark)
+        }.tint(DKTheme.accent)
     }
 }

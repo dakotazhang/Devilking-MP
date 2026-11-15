@@ -2,6 +2,8 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var preferences: AppPreferences
+    @Environment(\.dynamicTypeSize) private var systemTypeSize
     @State private var selectedTab = 0
     @State private var selectedDownloader: ServiceKind? = nil
     @State private var downloaderFilter: DashboardTaskFilter = .all
@@ -31,10 +33,12 @@ struct RootView: View {
 
             if model.locked { lockScreen }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(preferences.theme.colorScheme)
         .alert("操作结果", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("知道了", role: .cancel) { model.message = nil }
-        } message: { Text(model.message ?? "") }
+        } message: { Text(LocalizedStringKey(model.message ?? "")) }
+        .environment(\.locale, preferences.language.locale)
+        .environment(\.dynamicTypeSize, preferences.fontSize.dynamicTypeSize(system: systemTypeSize))
     }
 
     private var lockScreen: some View {

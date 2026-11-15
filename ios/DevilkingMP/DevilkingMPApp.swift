@@ -12,6 +12,7 @@ struct DevilkingMPApp: App {
             ZStack {
                 RootView()
                     .environmentObject(model)
+                    .environmentObject(model.preferences)
                     .accessibilityHidden(scenePhase != .active)
 
                 // Cover the app switcher snapshot without relocking on a Face ID
