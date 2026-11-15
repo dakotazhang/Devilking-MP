@@ -4,9 +4,9 @@
 
 原生 iPhone 家庭媒体管理工具：在外发现影视、搜索片名、追订电影和剧集，查看家中下载与长期做种情况。iOS 16.1+，SwiftUI，直接连接现有服务，无需额外部署后台。
 
-**1.3 功能更新**：五个页面加入可关闭的角色主题背景，“确认下载器身份”用具体例子说明任务会发往哪一台。影视订阅与 PT 资源搜索分开使用，目录和下载器来自你自己的 MoviePilot。当前分支的构建与设备测试结果随对应版本记录。
+**1.3.0 测试版**：影视推荐跟随 MP 已启用的栏目，海报经 MP 图片缓存读取；五个页面加入可关闭的角色主题背景，“确认下载器身份”用具体例子说明任务会发往哪一台。影视订阅与 PT 资源搜索分开使用，目录和下载器来自你自己的 MoviePilot。
 
-已发布历史版本：[1.1.0 安装包与更新记录](https://github.com/dakotazhang/Devilking-MP/releases/tag/v1.1.0) · [1.1.0 模拟器界面](docs/screenshots/v1.1.0/README.md)。新功能请以对应版本发布记录为准。
+[1.3.0 测试版安装包与更新记录](https://github.com/dakotazhang/Devilking-MP/releases/tag/v1.3.0) · [1.3.0 模拟器界面](docs/screenshots/v1.3.0/README.md)。本版供真机复测，尚未作为稳定版验收；1.3.0 的 TrollStore 实机与证书设备测试仍待完成。历史版本：[1.1.0](https://github.com/dakotazhang/Devilking-MP/releases/tag/v1.1.0)。
 
 ## 五个常用页面
 
@@ -34,7 +34,7 @@ Emby 旧连接配置保留兼容，本版主导航专注订阅和下载器管理
 
 ## 安装与连接
 
-安装包在本项目 [Releases](https://github.com/dakotazhang/Devilking-MP/releases/latest) 提供。支持的系统使用 TrollStore，或使用自己的有效证书重签；项目不提供证书。最低 iOS 16.1，Bundle ID 保持 `top.devilkkkkk1.DevilkingMP`。
+安装包在 [1.3.0 测试版发布页](https://github.com/dakotazhang/Devilking-MP/releases/tag/v1.3.0) 提供。同一份无签名 IPA 可在支持的系统通过 TrollStore 安装，或使用自己的有效证书重签；项目不提供证书。最低 iOS 16.1，Bundle ID 保持 `top.devilkkkkk1.DevilkingMP`。
 
 首次在设置填写自己的服务，或在本地填写[连接模板](examples/connection.example.dkmp)后导入。**真实密码、Token、Cookie、受限链接和家庭导入文件不得提交仓库。** 登录资料存入本机钥匙串。
 
@@ -60,7 +60,9 @@ bash scripts/build-ios.sh all
 
 工作流使用合成接口与模拟器测试生成普通沙盒无签名 IPA，不需要 Apple 证书或真实家庭账号。构建、模拟器、真机及实际业务操作分别记录，不相互替代。
 
-协议与测试边界见[API 契约](docs/api-contract.md)、[审查与验收清单](docs/review-notes.md)。新版界面截图与构建结果随对应测试产物记录。
+1.3.0 安装包对应源码提交 `f0d94ccf41415b25628a67d2a28500be8d1ef64a`：171 项单元、接口与保护测试和 7 项原生模拟器界面流程通过；16 张使用合成数据的简体中文浅色截图已逐张查看。本文展示其中五张主页截图，完整截图与验收回执随测试版附件提供。模拟器结果不代表两台真机、英文/深色布局或真实下载与订阅写入已验证。
+
+协议与测试边界见[API 契约](docs/api-contract.md)、[审查与验收清单](docs/review-notes.md)和[1.3.0 界面与验证记录](docs/screenshots/v1.3.0/README.md)。
 
 ## 致谢与许可
 
