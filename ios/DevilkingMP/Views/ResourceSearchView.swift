@@ -20,6 +20,9 @@ struct MPResourceSearchView: View {
     @State private var submittedQuery: String?
     @State private var sitesExpanded = true
     @State private var searchTask: Task<Void, Never>?
+    @State private var searchCycle: UUID?
+    @State private var configurationEpoch: UUID?
+    @State private var configurationReloadID = UUID()
     @FocusState private var editingQuery: Bool
 
     init(media: MPDiscoveryItem? = nil, season: Int? = nil) {
@@ -53,8 +56,9 @@ struct MPResourceSearchView: View {
                 }.padding(18).frame(minHeight: geometry.size.height + 1, alignment: .top)
             }
             .refreshable { await loadConfiguration() }
-            .task { await loadConfiguration() }
+            .task(id: configurationReloadID) { await loadConfiguration() }
             .onDisappear { searchTask?.cancel() }
+            .onChange(of: model.resourceConnectionEpoch) { _ in resetForConnectionChange() }
             .sheet(item: $selectedResource) { resource in
                 MPResourceDownloadView(item: resource, downloaders: downloaders, directories: directories)
             }
@@ -146,23 +150,57 @@ struct MPResourceSearchView: View {
 
     private func loadConfiguration() async {
         guard !loadingConfiguration, !model.locked, model.isConfigured(.moviepilot) else { return }
+        let epoch = model.resourceConnectionEpoch
+        configurationEpoch = epoch
         loadingConfiguration = true
-        defer { loadingConfiguration = false }
+        defer { if configurationEpoch == epoch { loadingConfiguration = false } }
         var errors: [String] = []
         do {
             let loaded = try await model.resourceSites()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, model.resourceConnectionEpoch == epoch else { return }
             sites = loaded
             selectedSites.formIntersection(Set(loaded.map(\.id)))
-        } catch { errors.append(AppModel.safeError(error)) }
+        } catch {
+            guard !Task.isCancelled, !(error is CancellationError), model.resourceConnectionEpoch == epoch else { return }
+            errors.append(AppModel.safeError(error))
+        }
         do {
-            downloaders = try await model.resourceDownloaders()
-        } catch { errors.append(AppModel.safeError(error)) }
+            let loaded = try await model.resourceDownloaders()
+            guard !Task.isCancelled, model.resourceConnectionEpoch == epoch else { return }
+            downloaders = loaded
+        } catch {
+            guard !Task.isCancelled, !(error is CancellationError), model.resourceConnectionEpoch == epoch else { return }
+            errors.append(AppModel.safeError(error))
+        }
         do {
-            directories = try await model.resourceDirectories()
-        } catch { errors.append(AppModel.safeError(error)) }
-        guard !Task.isCancelled else { return }
+            let loaded = try await model.resourceDirectories()
+            guard !Task.isCancelled, model.resourceConnectionEpoch == epoch else { return }
+            directories = loaded
+        } catch {
+            guard !Task.isCancelled, !(error is CancellationError), model.resourceConnectionEpoch == epoch else { return }
+            errors.append(AppModel.safeError(error))
+        }
+        guard !Task.isCancelled, model.resourceConnectionEpoch == epoch else { return }
         configurationError = errors.isEmpty ? nil : Array(Set(errors)).sorted().joined(separator: "\n")
+    }
+
+    private func resetForConnectionChange() {
+        searchTask?.cancel()
+        searchCycle = nil
+        searching = false
+        selectedResource = nil
+        results = []
+        submittedQuery = nil
+        searchError = nil
+        sites = []
+        selectedSites = []
+        downloaders = []
+        directories = []
+        configurationError = nil
+        configurationEpoch = nil
+        loadingConfiguration = false
+        sitesExpanded = true
+        configurationReloadID = UUID()
     }
 
     private func beginSearch() {
@@ -175,14 +213,16 @@ struct MPResourceSearchView: View {
         results = []
         submittedQuery = term
         sitesExpanded = false
+        let cycle = UUID()
+        searchCycle = cycle
         searchTask = Task {
-            defer { searching = false }
+            defer { if searchCycle == cycle { searching = false } }
             do {
                 let rows = try await model.searchResources(query: term, sites: chosenSites, media: media, season: season)
-                guard !Task.isCancelled, !model.locked else { return }
+                guard !Task.isCancelled, !model.locked, searchCycle == cycle else { return }
                 results = rows
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, searchCycle == cycle else { return }
                 searchError = AppModel.safeError(error)
             }
         }
@@ -229,6 +269,7 @@ private struct MPResourceDownloadView: View {
     @State private var submitting = false
     @State private var attempted = false
     @State private var accepted = false
+    @State private var resultFeedback: String?
 
     private var downloader: MPResourceDownloader? { downloaders.first { $0.id == downloaderID } }
     private var directory: MPResourceDirectory? { directories.first { $0.id == directoryID } }
@@ -236,7 +277,7 @@ private struct MPResourceDownloadView: View {
         downloader.flatMap { preferences.boundDownloaderKind(for: $0.bindingID, baseURL: model.profile(.moviepilot).baseURL) }
     }
     private var permitted: Bool { downloader.map { model.canDownloadResource($0) } ?? false }
-    private var canSubmit: Bool { item.canDownload && permitted && !submitting && !attempted }
+    private var canSubmit: Bool { item.canDownload && model.isCurrentResource(item) && permitted && !submitting && !attempted }
     private var directoryTitle: String { directory.map { $0.name.isEmpty ? $0.savePath : $0.name } ?? "沿用 MoviePilot 默认目录" }
 
     var body: some View {
@@ -274,10 +315,15 @@ private struct MPResourceDownloadView: View {
                             Label("下载请求已提交", systemImage: "checkmark.circle.fill").foregroundStyle(DKTheme.green)
                             Text("请在下载器或 MoviePilot 中核对任务；此页面不会重复提交。")
                                 .font(.caption).foregroundStyle(DKTheme.muted)
+                        } else if submitting {
+                            ProgressView("正在提交一次下载请求")
+                            Text("请等待结果，勿在其他页面重复添加。")
+                                .font(.caption).foregroundStyle(DKTheme.muted)
                         } else if attempted {
                             Label("请核对下载结果", systemImage: "clock.badge.exclamationmark").foregroundStyle(DKTheme.amber)
                             Text("本次操作已尝试一次。即使回读未完成，也请先到原管理页核对。")
                                 .font(.caption).foregroundStyle(DKTheme.muted)
+                            if let resultFeedback { Text(resultFeedback).font(.caption).foregroundStyle(DKTheme.amber) }
                         } else {
                             Button { confirming = true } label: {
                                 HStack {
@@ -292,6 +338,9 @@ private struct MPResourceDownloadView: View {
                                 Text("请明确选择本次使用的下载器。") .font(.caption).foregroundStyle(DKTheme.muted)
                             } else if !permitted {
                                 Label("此下载器受迁移保护或尚未匹配可管理的连接。", systemImage: "lock")
+                                    .font(.caption).foregroundStyle(DKTheme.amber)
+                            } else if !model.isCurrentResource(item) {
+                                Text("连接已变化，请返回重新搜索这份资源。")
                                     .font(.caption).foregroundStyle(DKTheme.amber)
                             } else if !item.canDownload {
                                 Text("这份资源缺少可用下载信息，请在 MoviePilot 原页面核对。")
@@ -312,6 +361,12 @@ private struct MPResourceDownloadView: View {
                 directoryID = directories.contains(where: { $0.id == id }) ? (id ?? "") : ""
             }
             .interactiveDismissDisabled(submitting)
+            .onChange(of: model.interactionEpoch) { _ in confirming = false }
+            .onChange(of: boundKind) { _ in confirming = false }
+            .onChange(of: model.resourceConnectionEpoch) { _ in
+                confirming = false
+                if !submitting { dismiss() }
+            }
             .alert("确认新增下载任务？", isPresented: $confirming) {
                 Button("取消", role: .cancel) {}
                 Button("确认下载") { Task { await submit() } }
@@ -327,6 +382,7 @@ private struct MPResourceDownloadView: View {
         submitting = true
         attempted = true
         accepted = await model.downloadResource(MPResourceDownloadRequest(item: item, downloader: downloader, directory: directory))
+        resultFeedback = model.message
         submitting = false
     }
 }

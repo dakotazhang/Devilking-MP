@@ -20,14 +20,16 @@ import LocalAuthentication
     @Published var resourceDirectoryOptions:[MPResourceDirectory]=[]
     @Published var resourceDirectoriesLoading=false
     @Published var resourceDirectoriesError:String?
+    @Published private(set) var resourceConnectionEpoch=UUID()
+    @Published private(set) var interactionEpoch=UUID()
     @Published var sites: [SiteAccount]=[]
     @Published var library: [MediaItem]=[]
     @Published var searchResults: [MediaItem]=[]
     @Published var sessions: [PlaybackSession]=[]
     @Published var busy=false
     @Published var message: String?
-    @Published var readOnlyMode:Bool { didSet { defaults.set(readOnlyMode,forKey:"readOnlyMode");generation &+= 1 } }
-    @Published var migrationProtection: Bool { didSet { defaults.set(migrationProtection,forKey:"migrationProtection");generation &+= 1 } }
+    @Published var readOnlyMode:Bool { didSet { defaults.set(readOnlyMode,forKey:"readOnlyMode");generation &+= 1;interactionEpoch=UUID() } }
+    @Published var migrationProtection: Bool { didSet { defaults.set(migrationProtection,forKey:"migrationProtection");generation &+= 1;interactionEpoch=UUID() } }
     @Published var biometricEnabled: Bool { didSet { defaults.set(biometricEnabled,forKey:"biometricEnabled") } }
     @Published var locked=false
     private let defaults:UserDefaults
@@ -79,6 +81,7 @@ import LocalAuthentication
     private func persist() { if let data=try? JSONEncoder().encode(profiles) { defaults.set(data,forKey:"profiles") } }
     func saveConnection(_ kind:ServiceKind,baseURL:String,username:String,password:String,apiKey:String,allowActions:Bool) throws {
         generation &+= 1
+        interactionEpoch=UUID()
         let url=try EndpointPolicy.validate(baseURL)
         if kind.isDownloader {
             let proposed=url.absoluteString.trimmingCharacters(in:CharacterSet(charactersIn:"/"))
@@ -87,6 +90,7 @@ import LocalAuthentication
         guard !password.isEmpty || !apiKey.isEmpty else { throw AppError.message("请填写密码或 API Key。") }
         if apiKey.isEmpty && username.isEmpty { throw AppError.message("请输入用户名。") }
         try KeychainStore.write(Credential(username:username,password:password,apiKey:apiKey),kind:kind)
+        if kind == .moviepilot { resourceConnectionEpoch=UUID() }
         resetReadJobs()
         if kind == .moviepilot || kind.isDownloader { preferences.clearResourcePreferences(for:profile(.moviepilot).baseURL) }
         let p=ServiceProfile(kind:kind,baseURL:url.absoluteString.trimmingCharacters(in:CharacterSet(charactersIn:"/")),username:username,allowActions:allowActions)
@@ -98,6 +102,8 @@ import LocalAuthentication
     }
     func disconnect(_ kind:ServiceKind) {
         generation &+= 1
+        interactionEpoch=UUID()
+        if kind == .moviepilot { resourceConnectionEpoch=UUID() }
         resetReadJobs()
         if kind == .moviepilot || kind.isDownloader { preferences.clearResourcePreferences(for:profile(.moviepilot).baseURL) }
         KeychainStore.delete(kind);clients[kind]=nil;snapshots[kind]=nil;dashboardSnapshots[kind]=nil
@@ -312,13 +318,17 @@ import LocalAuthentication
     }
     func searchResources(query:String,sites:[String],media:MPDiscoveryItem? = nil,season:Int? = nil) async throws -> [MPResourceItem] {
         #if DEBUG
-        if uiFixtureMode { return UITestFixtures.resourceSearch(query,sites:sites) }
+        if uiFixtureMode { return stampResources(UITestFixtures.resourceSearch(query,sites:sites)) }
         #endif
         let g=generation,api=try client(.moviepilot)
         let rows=try await ReadBudget.run(seconds:150) { try await api.searchResources(query:query,sites:sites,media:media,season:season) }
         try validateReadGeneration(g)
-        return rows
+        return stampResources(rows)
     }
+    private func stampResources(_ rows:[MPResourceItem])->[MPResourceItem] {
+        rows.map { var row=$0;row.connectionToken=resourceConnectionEpoch;return row }
+    }
+    func isCurrentResource(_ item:MPResourceItem)->Bool { item.connectionToken == resourceConnectionEpoch }
     private func validateReadGeneration(_ g:Int) throws {
         try Task.checkCancellation()
         guard g == generation && !locked else{throw AppError.message("连接或锁定状态已变化，请重新读取。")}
@@ -332,7 +342,7 @@ import LocalAuthentication
     @discardableResult func downloadResource(_ request:MPResourceDownloadRequest) async -> Bool {
         do {
             try guardAction(.moviepilot)
-            guard request.isValid,canDownloadResource(request.downloader),
+            guard request.isValid,isCurrentResource(request.item),canDownloadResource(request.downloader),
                   let kind=preferences.boundDownloaderKind(for:request.downloader.bindingID,baseURL:profile(.moviepilot).baseURL) else {
                 throw AppError.message("请先在设置中确认下载器对应关系并授权；只读锁和迁移保护仍然生效。")
             }
@@ -353,6 +363,7 @@ import LocalAuthentication
     }
     private func resourceDownloadAllowed(_ request:MPResourceDownloadRequest,generation:Int,kind:ServiceKind,target:ServiceProfile)->Bool {
         self.generation == generation && !Task.isCancelled && canDownloadResource(request.downloader) &&
+        isCurrentResource(request.item) &&
         preferences.boundDownloaderKind(for:request.downloader.bindingID,baseURL:profile(.moviepilot).baseURL) == kind &&
         profile(kind).baseURL == target.baseURL && profile(kind).username == target.username
     }
@@ -462,6 +473,7 @@ import LocalAuthentication
     }
     func protectOnBackground() {
         generation &+= 1;discoverySearchGeneration &+= 1
+        interactionEpoch=UUID()
         dashboardJob?.cancel();discoveryJob?.cancel()
         if biometricEnabled { locked=true };clients=[:]
     }

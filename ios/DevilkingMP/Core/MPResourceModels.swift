@@ -43,6 +43,8 @@ struct MPResourceItem: Identifiable, CustomStringConvertible, CustomDebugStringC
     var freeUntil: String? = nil
     var hasHR: Bool? = nil
     var payload: MPResourcePayload? = nil
+    /// Runtime-only provenance. Never Codable or part of a server request.
+    var connectionToken: UUID? = nil
     var canDownload: Bool { payload != nil && id.hasPrefix("resource:") }
     var description: String { "MPResourceItem(redacted)" }
     var debugDescription: String { description }

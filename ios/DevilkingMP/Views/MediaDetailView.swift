@@ -75,6 +75,7 @@ struct MPDiscoveryDetailView: View {
                 }
             }
             .interactiveDismissDisabled(submitting)
+            .onChange(of: model.interactionEpoch) { _ in confirmingRequest = nil }
             .alert("确认新增订阅？", isPresented: Binding(get: { confirmingRequest != nil }, set: { if !$0 { confirmingRequest = nil } }), presenting: confirmingRequest) { confirmed in
                 Button("取消", role: .cancel) {}
                 Button("确认订阅") { Task { await submit(confirmed) } }
