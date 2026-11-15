@@ -4,7 +4,7 @@
 
 [OiiQT by gangz1o](https://github.com/gangz1o/OiiQT) was reviewed as a feature and protocol reference for a mobile qBittorrent, Transmission and MoviePilot manager. Its upstream source is licensed under [GPLv3](https://github.com/gangz1o/OiiQT/blob/master/LICENSE).
 
-Devilking MP管理 is an independent implementation. It does not incorporate OiiQT source code, artwork or binaries. Referencing functionality and API behavior does not relicense upstream code. Future contributors who copy or adapt upstream implementation must preserve its notices and comply with its license; the project's original-code license does not override those obligations.
+Pocket Rem (口袋蕾姆) is an independent implementation. It does not incorporate OiiQT source code, artwork or binaries. Referencing functionality and API behavior does not relicense upstream code. Future contributors who copy or adapt upstream implementation must preserve its notices and comply with its license; the project's original-code license does not override those obligations.
 
 ## Original code and assets
 

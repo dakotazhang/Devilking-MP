@@ -14,7 +14,12 @@ struct MPResourceDownloader: Identifiable, Equatable {
     var targetBaseURL: String? = nil
     var isDefault: Bool = false
     var bindingID: String { MPResourceParser.digest([id,type,targetBaseURL ?? "unknown"].joined(separator:"\n")) }
-    var canBind: Bool { targetBaseURL != nil && !compatibleKinds.isEmpty }
+    var canBind: Bool { targetBaseURL != nil && compatibleProtocol != nil }
+    var compatibleProtocol: ServiceProtocol? {
+        switch type.lowercased() { case "qbittorrent": return .qbittorrent; case "transmission": return .transmission; default: return nil }
+    }
+    func accepts(_ instanceID: ServiceID) -> Bool { compatibleProtocol == instanceID.protocolKind }
+    /// Legacy fixture compatibility. Live candidates must filter actual profiles via accepts(_:).
     var compatibleKinds: [ServiceKind] {
         switch type.lowercased() { case "qbittorrent": return [.qb1, .qb2]; case "transmission": return [.tr]; default: return [] }
     }

@@ -61,11 +61,11 @@ struct DevilkingMPApp: App {
                 Image(systemName: "shield.lefthalf.filled")
                     .font(.system(size: 42, weight: .light))
                     .foregroundColor(Color(red: 0.57, green: 0.81, blue: 0.96))
-                Text("Devilking MP管理")
+                Text("口袋蕾姆")
                     .font(.headline)
                     .foregroundColor(.white)
             }
         }
-        .accessibilityLabel("家庭媒体管理内容已隐藏")
+        .accessibilityLabel("服务器管理内容已隐藏")
     }
 }

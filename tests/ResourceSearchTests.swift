@@ -217,7 +217,7 @@ final class ResourceSearchTests: XCTestCase {
         var changed=request();changed.item=MPResourceParser.item(row(enclosure:"https://tracker.example/download.php?id=345&token=new"))!
         XCTAssertEqual(original,ledger.key(profile:profile,request:changed,target:target))
         XCTAssertNotEqual(original,ledger.key(profile:profile,request:request(directory:directory),target:target))
-        var other=target;other.kind = .qb2
+        let other=ServiceProfile(kind:.qb2,baseURL:target.baseURL,username:target.username)
         XCTAssertNotEqual(original,ledger.key(profile:profile,request:request(),target:other))
         var otherMP=profile;otherMP.username="another"
         XCTAssertNotEqual(original,ledger.key(profile:otherMP,request:request(),target:target))
@@ -227,7 +227,7 @@ final class ResourceSearchTests: XCTestCase {
         let ledger=ResourceDownloadLedger(defaults:defaults),profile=ServiceProfile(kind:.moviepilot,baseURL:base,username:"fixture"),target=ServiceProfile(kind:.qb1,baseURL:"http://192.168.1.100:8085",username:"fixture")
         let original=ledger.key(profile:profile,request:request(),target:target)
         let differentDirectory=ledger.key(profile:profile,request:request(directory:directory),target:target)
-        var other=target;other.kind = .qb2;other.baseURL="http://192.168.1.100:8086"
+        let other=ServiceProfile(kind:.qb2,baseURL:"http://192.168.1.100:8086",username:target.username)
         let differentTarget=ledger.key(profile:profile,request:request(),target:other)
         try ledger.prepare(original)
         for key in [differentDirectory,differentTarget] {

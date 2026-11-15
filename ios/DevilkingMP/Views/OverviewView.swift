@@ -6,46 +6,55 @@ struct OverviewView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var isVisible=false
+    @State private var displayNow = Date()
     let openSettings: () -> Void
     var openDownloaders: (ServiceKind?, DashboardTaskFilter) -> Void = { _, _ in }
 
     private var configuredKinds: [ServiceKind] {
-        [ServiceKind.qb1, .qb2, .tr].filter { model.isConfigured($0) }
+        model.visibleDownloaderProfiles.filter { model.isConfigured($0.kind) }.map(\.kind)
     }
     private var columns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: 12), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2)
     }
 
     var body: some View {
+        let scopeKinds = configuredKinds
+        let aggregate = DashboardAggregate(configured: scopeKinds, snapshots: model.dashboardSnapshots, now: displayNow)
         NavigationStack {
-            TimelineView(.periodic(from: .now, by: 15)) { context in
-                let aggregate = DashboardAggregate(configured: configuredKinds, snapshots: model.dashboardSnapshots, now: context.date)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        DKCharacterHeader()
-                        refreshHeader
-                        if configuredKinds.isEmpty {
-                            firstRun
-                        } else {
-                            if preferences.isVisible(.traffic) { traffic(aggregate) }
-                            if preferences.isVisible(.tasks) { taskOverview(aggregate) }
-                            if model.migrationProtection { DKProtectionNotice(compact: true) }
-                            if preferences.isVisible(.services) {
-                                DKSectionTitle(title: "下载器状态", subtitle: "点开查看任务与筛选；每个服务独立读取。")
-                                ForEach(configuredKinds) { kind in
-                                    DownloaderDashboardCard(kind: kind, snapshot: model.dashboardSnapshots[kind], now: context.date) {
-                                        openDownloaders(kind, .all)
-                                    }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    DKCharacterHeader()
+                    refreshHeader
+                    if let error = model.configurationError {
+                        DKCard {
+                            Label("服务器配置未读到", systemImage: "exclamationmark.triangle").foregroundStyle(DKTheme.amber)
+                            Text(error).font(.caption).foregroundStyle(DKTheme.muted)
+                            Text("原本机配置保留，未自动重置。请先检查连接配置，再恢复访问。")
+                                .font(.caption).foregroundStyle(DKTheme.muted)
+                        }.accessibilityIdentifier("servers.configurationError")
+                    }
+                    DKGroupScopePicker(context: "status")
+                    if scopeKinds.isEmpty {
+                        firstRun
+                    } else {
+                        if preferences.isVisible(.traffic) { traffic(aggregate) }
+                        if preferences.isVisible(.tasks) { taskOverview(aggregate) }
+                        if model.migrationProtection && scopeKinds.contains(where: { model.profile($0).migrationProtected }) { DKProtectionNotice(compact: true) }
+                        if preferences.isVisible(.services) {
+                            DKSectionTitle(title: "下载器状态", subtitle: "点开查看任务与筛选；每个服务独立读取。")
+                            ForEach(scopeKinds) { kind in
+                                DownloaderDashboardCard(kind: kind, snapshot: model.dashboardSnapshots[kind], now: displayNow) {
+                                    openDownloaders(kind, .all)
                                 }
                             }
-                            if preferences.isVisible(.storage) { storage(now: context.date) }
-                            if preferences.isVisible(.services) { serviceEntrances }
                         }
-                    }.padding(18)
-                }
-                .refreshable { await model.refreshDashboard() }
+                        if preferences.isVisible(.storage) { storage(now: displayNow) }
+                        if preferences.isVisible(.services) { serviceEntrances }
+                    }
+                }.padding(18)
             }
-            .navigationTitle("仪表盘")
+            .refreshable { await model.refreshDashboard() }
+            .navigationTitle("状态表")
             .navigationBarTitleDisplayMode(.inline)
             .dkScreen()
             .task(id: refreshScheduleID) {
@@ -58,12 +67,20 @@ struct OverviewView: View {
                     await model.refreshDashboard(manual:false)
                 }
             }
-            .onAppear { isVisible=true }
+            .task(id: freshnessScheduleID) {
+                guard isVisible, scenePhase == .active, !model.locked else { return }
+                while !Task.isCancelled && isVisible && scenePhase == .active && !model.locked {
+                    do { try await Task.sleep(nanoseconds: 15_000_000_000) } catch { return }
+                    displayNow = Date()
+                }
+            }
+            .onAppear { isVisible=true; displayNow=Date() }
             .onDisappear { isVisible=false;model.cancelDashboardRefresh() }
         }
     }
 
-    private var refreshScheduleID:String { "\(preferences.refreshInterval)-\(scenePhase == .active)-\(model.locked)-\(isVisible)" }
+    private var refreshScheduleID:String { "\(preferences.selectedGroupID ?? "all-groups")-\(configuredKinds.map(\.rawValue).joined(separator: ","))-\(preferences.refreshInterval)-\(scenePhase == .active)-\(model.locked)-\(isVisible)" }
+    private var freshnessScheduleID: String { "\(isVisible)-\(scenePhase == .active)-\(model.locked)" }
 
     private var refreshHeader: some View {
         ViewThatFits(in: .horizontal) {
@@ -73,7 +90,7 @@ struct OverviewView: View {
     }
     private var headerTitle: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("家庭下载与保种").font(.title2.weight(.bold))
+            Text("下载与保种").font(.title2.weight(.bold))
             Text(preferences.refreshInterval == 0 ? "仅手动刷新 · 默认只读" : "前台每\(preferences.refreshInterval)秒更新 · 默认只读")
                 .font(.caption).foregroundStyle(DKTheme.muted)
         }
@@ -87,16 +104,16 @@ struct OverviewView: View {
             }.font(.subheadline.weight(.semibold)).padding(.horizontal, 10).frame(minHeight: 44)
         }.buttonStyle(.bordered)
         .disabled(model.dashboardManualRefreshing || model.locked || configuredKinds.isEmpty)
-        .accessibilityLabel("刷新仪表盘，只读取下载器状态")
+        .accessibilityLabel("刷新状态表，只读取下载器状态")
         .accessibilityIdentifier("dashboard.refresh")
     }
     private var firstRun: some View {
         DKCard {
-            DKEmptyState(symbol: "house.and.flag", title: "连接家庭下载器", detail: "添加 qB1、qB2 或 TR，即可查看流量、任务和默认下载盘余量。未连接时不显示演示统计。")
+            DKEmptyState(symbol: "server.rack", title: model.downloaderProfiles.isEmpty ? "连接你的下载器" : "当前范围没有已连接下载器", detail: model.downloaderProfiles.isEmpty ? "添加任意数量的 qBittorrent 或 Transmission，按自己的分组查看流量、任务和磁盘余量。未连接时不显示演示统计。" : "可切换统计范围、调整分组成员，或在服务器设置中连接已保存的下载器。")
             Button(action: openSettings) {
                 Label("配置服务连接", systemImage: "plus.circle.fill").frame(maxWidth: .infinity).frame(minHeight: 44)
             }.buttonStyle(.borderedProminent)
-            Text("外出使用请先接入家庭 VPN。登录资料仅存本机钥匙串。").font(.caption).foregroundStyle(DKTheme.muted)
+            Text("使用内网地址时请先连接自己的 VPN。登录资料仅存本机钥匙串。").font(.caption).foregroundStyle(DKTheme.muted)
         }
     }
     private func traffic(_ aggregate: DashboardAggregate) -> some View {
@@ -142,7 +159,7 @@ struct OverviewView: View {
                 let snapshot = model.dashboardSnapshots[kind]
                 let current = snapshot?.isFresh(now: now) == true
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(kind.compactTitle).font(.subheadline.weight(.semibold))
+                    Text(verbatim: model.profile(kind).displayName).font(.subheadline.weight(.semibold))
                     if let disk = snapshot?.disk {
                         Text("\(disk.label) · 可用 \(Format.bytes(disk.freeBytes))\(current ? "" : "（上次数据）")")
                             .font(.subheadline).foregroundStyle(current ? DKTheme.accent : DKTheme.muted).monospacedDigit()
@@ -160,8 +177,8 @@ struct OverviewView: View {
     private var serviceEntrances: some View {
         DKCard {
             Text("管理入口").font(.headline)
-            ForEach(ServiceKind.allCases.filter { model.isConfigured($0) }) { kind in
-                DKServiceLink(kind: kind, title: "打开 \(kind.compactTitle)").frame(minHeight: 36)
+            ForEach(configuredKinds + model.profiles.filter { !$0.kind.isDownloader && model.isConfigured($0.kind) }.map(\.kind)) { kind in
+                DKServiceLink(kind: kind, title: "打开 \(model.profile(kind).displayName)").frame(minHeight: 36)
             }
             Button(action: openSettings) { Label("连接与只读权限", systemImage: "lock.shield") }.font(.subheadline).frame(minHeight: 44)
         }
@@ -197,6 +214,7 @@ private struct DashboardMetric: View {
 }
 
 private struct DownloaderDashboardCard: View {
+    @EnvironmentObject private var model: AppModel
     let kind: ServiceKind
     let snapshot: DashboardSnapshot?
     let now: Date
@@ -213,13 +231,13 @@ private struct DownloaderDashboardCard: View {
                 HStack(alignment: .top, spacing: 12) {
                     Image(systemName: kind.symbol).font(.title2).foregroundStyle(DKTheme.accent)
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(kind.compactTitle).font(.headline).foregroundStyle(DKTheme.text)
-                        Text(kind.subtitle).font(.caption).foregroundStyle(DKTheme.muted)
+                        Text(verbatim: model.profile(kind).displayName).font(.headline).foregroundStyle(DKTheme.text)
+                        Text(LocalizedStringKey(kind.protocolKind.title)).font(.caption).foregroundStyle(DKTheme.muted)
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.right").font(.caption).foregroundStyle(DKTheme.muted)
                 }.frame(minHeight: 44)
-            }.buttonStyle(.plain)
+            }.buttonStyle(.plain).accessibilityIdentifier("dashboard.server." + kind.rawValue)
             DKStatus(text: state, color: current ? DKTheme.green : DKTheme.amber)
             if let snapshot {
                 if let error = snapshot.error { Text(error).font(.caption).foregroundStyle(DKTheme.amber) }

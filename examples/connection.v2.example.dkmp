@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "services": [
+    {"type": "qbittorrent", "name": "家庭下载器", "baseURL": "https://qb.example.com", "username": "", "password": ""},
+    {"type": "transmission", "name": "长期保种", "baseURL": "https://tr.example.com", "username": "", "password": ""},
+    {"type": "qbittorrent", "name": "刷流盒子", "baseURL": "https://seedbox.example.com/qb", "username": "", "password": ""},
+    {"kind": "moviepilot", "name": "MoviePilot", "baseURL": "https://mp.example.com", "username": "", "apiKey": ""}
+  ]
+}

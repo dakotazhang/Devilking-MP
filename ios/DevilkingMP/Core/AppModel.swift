@@ -3,7 +3,7 @@ import Combine
 import LocalAuthentication
 
 @MainActor final class AppModel: ObservableObject {
-    @Published var profiles: [ServiceProfile]
+    @Published var profiles: [ServiceProfile] { didSet { primeCredentialAvailability() } }
     @Published var snapshots: [ServiceKind:ServiceSnapshot]=[:]
     @Published var tasks: [TorrentTask]=[]
     @Published var subscriptions: [Subscription]=[]
@@ -29,6 +29,7 @@ import LocalAuthentication
     @Published var sessions: [PlaybackSession]=[]
     @Published var busy=false
     @Published var message: String?
+    @Published private(set) var configurationError: String?
     @Published var readOnlyMode:Bool { didSet { defaults.set(readOnlyMode,forKey:"readOnlyMode");generation &+= 1;interactionEpoch=UUID() } }
     @Published var migrationProtection: Bool { didSet { defaults.set(migrationProtection,forKey:"migrationProtection");generation &+= 1;interactionEpoch=UUID() } }
     @Published var biometricEnabled: Bool { didSet { defaults.set(biometricEnabled,forKey:"biometricEnabled") } }
@@ -36,8 +37,13 @@ import LocalAuthentication
     private let defaults:UserDefaults
     let preferences:AppPreferences
     private let credentialReader:(ServiceKind)->Credential
+    private let credentialWriter:(Credential,ServiceKind)throws->Void
+    private let credentialDeleter:(ServiceKind)throws->Void
     private let clientFactory:(ServiceProfile,Credential)->APIClient
     private let readBudgetSeconds:TimeInterval
+    // Presence is sufficient for rendering. Never cross into Security.framework
+    // from a row/body predicate, and never retain plaintext credentials here.
+    @Published private var credentialAvailability:[ServiceID:Bool]=[:]
     private var clients:[ServiceKind:APIClient]=[:]
     private var inflight=Set<String>()
     private var refreshRunning=false
@@ -46,16 +52,20 @@ import LocalAuthentication
     private var discoverySearchGeneration=0
     private var dashboardJob:Task<Void,Never>?
     private var dashboardCycle:UUID?
+    private var dashboardScope:[ServiceID]=[]
     private var discoveryJob:Task<Void,Never>?
     private var discoveryCycle:UUID?
     #if DEBUG
     var uiFixtureMode=false
+    private var fixtureCredentials:[ServiceID:Credential]=[:]
+    private var fixtureClearedCredentials=Set<ServiceID>()
     #endif
     private let posterCache:NSCache<NSString,NSData> = {let c=NSCache<NSString,NSData>();c.countLimit=100;c.totalCostLimit=32*1024*1024;return c}()
     private let mpArtworkCache:NSCache<NSString,NSData> = {let c=NSCache<NSString,NSData>();c.countLimit=80;c.totalCostLimit=16*1024*1024;return c}()
     private let mpArtworkGate=MPArtworkReadGate(limit:4)
+    private let downloaderReadGate=DownloaderReadGate(limit:4)
     private var mpArtworkJobs:[String:(UUID,Task<Data?,Never>)]=[:]
-    init(defaults:UserDefaults = .standard, credentialReader:@escaping (ServiceKind)->Credential = { KeychainStore.read($0) }, clientFactory:@escaping (ServiceProfile,Credential)->APIClient = { APIClient(profile:$0,credentials:$1) }, readBudgetSeconds:TimeInterval = 22) {
+    init(defaults:UserDefaults = .standard, credentialReader:@escaping (ServiceKind)->Credential = { KeychainStore.read($0) }, credentialWriter:@escaping (Credential,ServiceKind)throws->Void = { try KeychainStore.write($0,kind:$1) }, credentialDeleter:@escaping (ServiceKind)throws->Void = { try KeychainStore.deleteVerified($0) }, clientFactory:@escaping (ServiceProfile,Credential)->APIClient = { APIClient(profile:$0,credentials:$1) }, readBudgetSeconds:TimeInterval = 22) {
         #if DEBUG
         let defaults = ProcessInfo.processInfo.arguments.contains("--ui-fixture") ? UserDefaults(suiteName:"DevilkingMP-UITestFixture")! : defaults
         if ProcessInfo.processInfo.arguments.contains("--ui-fixture") { defaults.removePersistentDomain(forName:"DevilkingMP-UITestFixture") }
@@ -63,59 +73,156 @@ import LocalAuthentication
         self.defaults=defaults
         preferences=AppPreferences(defaults:defaults)
         self.credentialReader=credentialReader
+        self.credentialWriter=credentialWriter
+        self.credentialDeleter=credentialDeleter
         self.clientFactory=clientFactory
         self.readBudgetSeconds=readBudgetSeconds
-        profiles=(defaults.data(forKey:"profiles").flatMap{try? JSONDecoder().decode([ServiceProfile].self,from:$0)}) ?? ServiceKind.allCases.map{ServiceProfile(kind:$0,baseURL:$0.defaultURL,username:"")}
+        var initialAvailability:[ServiceID:Bool]=[:]
+        let loaded=ConnectionProfileStore.load(defaults:defaults,legacyCredentialExists:{ kind in
+            if let present=initialAvailability[kind] {return present}
+            let present = !credentialReader(kind).isEmpty
+            initialAvailability[kind]=present;return present
+        })
+        profiles=loaded.profiles;configurationError=loaded.error ?? defaults.string(forKey:"profiles.recoveryRequired")
         migrationProtection=defaults.object(forKey:"migrationProtection") == nil ? true:defaults.bool(forKey:"migrationProtection")
         readOnlyMode=defaults.object(forKey:"readOnlyMode") == nil ? true:defaults.bool(forKey:"readOnlyMode")
         biometricEnabled=defaults.bool(forKey:"biometricEnabled");locked=biometricEnabled
+        credentialAvailability=initialAvailability
+        primeCredentialAvailability()
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--ui-fixture") { UITestFixtures.apply(to:self) }
         #endif
     }
     func profile(_ kind:ServiceKind)->ServiceProfile { profiles.first{$0.kind == kind} ?? ServiceProfile(kind:kind,baseURL:kind.defaultURL,username:"") }
-    func credential(_ kind:ServiceKind)->Credential { credentialReader(kind) }
-    func isConfigured(_ kind:ServiceKind)->Bool {
+    func credential(_ kind:ServiceKind)->Credential {
         #if DEBUG
-        if uiFixtureMode { return kind != .emby }
+        if uiFixtureMode {
+            guard !fixtureClearedCredentials.contains(kind) else{return Credential()}
+            return fixtureCredentials[kind] ?? (profiles.contains{$0.kind == kind} ? Credential(username:"fixture",password:"synthetic-only",apiKey:""):Credential())
+        }
         #endif
-        return !credential(kind).isEmpty
+        let value=credentialReader(kind)
+        recordCredentialAvailability(!value.isEmpty,kind:kind)
+        return value
     }
-    func canManage(_ kind:ServiceKind)->Bool { !readOnlyMode && !locked && profile(kind).allowActions && isConfigured(kind) && !([ServiceKind.qb1,.tr].contains(kind) && migrationProtection) }
-    private func persist() { if let data=try? JSONEncoder().encode(profiles) { defaults.set(data,forKey:"profiles") } }
-    func saveConnection(_ kind:ServiceKind,baseURL:String,username:String,password:String,apiKey:String,allowActions:Bool) throws {
-        generation &+= 1
-        interactionEpoch=UUID()
+    private func recordCredentialAvailability(_ present:Bool,kind:ServiceID) {
+        guard credentialAvailability[kind] != present else{return}
+        credentialAvailability[kind]=present
+    }
+    private func primeCredentialAvailability() {
+        for profile in profiles where credentialAvailability[profile.kind] == nil {
+            _ = credential(profile.kind)
+        }
+    }
+    /// A lifecycle/explicit-read boundary, not a SwiftUI body predicate.
+    func refreshCredentialAvailability() {
+        for profile in profiles { _ = credential(profile.kind) }
+    }
+    private func writeCredential(_ value:Credential,_ kind:ServiceID) throws {
+        #if DEBUG
+        if uiFixtureMode {fixtureCredentials[kind]=value;fixtureClearedCredentials.remove(kind);recordCredentialAvailability(!value.isEmpty,kind:kind);return}
+        #endif
+        try credentialWriter(value,kind)
+        recordCredentialAvailability(!value.isEmpty,kind:kind)
+    }
+    private func deleteCredential(_ kind:ServiceID) throws {
+        #if DEBUG
+        if uiFixtureMode {fixtureCredentials[kind]=nil;fixtureClearedCredentials.insert(kind);recordCredentialAvailability(false,kind:kind);return}
+        #endif
+        try credentialDeleter(kind)
+        recordCredentialAvailability(false,kind:kind)
+    }
+    var downloaderProfiles:[ServiceProfile] { profiles.filter{ $0.kind.isDownloader } }
+    var selectedDownloaderIDs:[ServiceID] { preferences.scopedDownloaderIDs(downloaderProfiles.map(\.kind)) }
+    var visibleDownloaderProfiles:[ServiceProfile] { let ids=Set(selectedDownloaderIDs);return downloaderProfiles.filter{ids.contains($0.kind)} }
+    func hasSavedCredentials(_ kind:ServiceKind)->Bool {
+        #if DEBUG
+        if uiFixtureMode {return !fixtureClearedCredentials.contains(kind) && (fixtureCredentials[kind].map{!$0.isEmpty} ?? profiles.contains{$0.kind == kind})}
+        #endif
+        return credentialAvailability[kind] ?? false
+    }
+    func isConfigured(_ kind:ServiceKind)->Bool {
+        guard configurationError == nil,let p=profiles.first(where:{$0.kind == kind}),p.enabled else{return false}
+        return hasSavedCredentials(kind)
+    }
+    func canManage(_ kind:ServiceKind)->Bool { configurationError == nil && !readOnlyMode && !locked && profile(kind).allowActions && isConfigured(kind) && !(profile(kind).migrationProtected && migrationProtection) }
+    private func persist(_ next:[ServiceProfile]) throws {
+        guard configurationError == nil else{throw AppError.message(configurationError!)}
+        try ConnectionProfileStore.save(next,defaults:defaults);profiles=next
+    }
+    func saveConnection(_ kind:ServiceKind,baseURL:String,username:String,password:String,apiKey:String,allowActions:Bool,name:String?=nil,migrationProtected:Bool?=nil) throws {
+        guard configurationError == nil else{throw AppError.message(configurationError!)}
         let url=try EndpointPolicy.validate(baseURL)
         if kind.isDownloader {
-            let proposed=url.absoluteString.trimmingCharacters(in:CharacterSet(charactersIn:"/"))
-            guard !profiles.contains(where:{$0.kind != kind && $0.kind.isDownloader && $0.baseURL.trimmingCharacters(in:CharacterSet(charactersIn:"/")) == proposed}) else{throw AppError.message("两个下载器不能指向同一入口，以免绕过角色和迁移保护。")}
+            let proposed=ConnectionEndpointIdentity.key(url.absoluteString,kind:kind)
+            guard !profiles.contains(where:{$0.kind != kind && $0.kind.isDownloader && ConnectionEndpointIdentity.key($0.baseURL,kind:$0.kind) == proposed}) else{throw AppError.message("两个下载器不能指向同一入口，以免重复统计或绕过保护。")}
         }
         guard !password.isEmpty || !apiKey.isEmpty else { throw AppError.message("请填写密码或 API Key。") }
         if apiKey.isEmpty && username.isEmpty { throw AppError.message("请输入用户名。") }
-        try KeychainStore.write(Credential(username:username,password:password,apiKey:apiKey),kind:kind)
-        if kind == .moviepilot { resourceConnectionEpoch=UUID() }
-        resetReadJobs()
-        if kind == .moviepilot || kind.isDownloader { preferences.clearResourcePreferences(for:profile(.moviepilot).baseURL) }
-        let p=ServiceProfile(kind:kind,baseURL:url.absoluteString.trimmingCharacters(in:CharacterSet(charactersIn:"/")),username:username,allowActions:allowActions)
-        if let i=profiles.firstIndex(where:{$0.kind == kind}) { profiles[i]=p } else { profiles.append(p) }
-        clients[kind]=nil;snapshots[kind]=nil;dashboardSnapshots[kind]=nil;tasks.removeAll{$0.kind == kind}
-        if kind == .moviepilot{subscriptions=[];sites=[];searchResults=[];discoverySections=[];discoveryResults=[];discoveryError=nil;discoveryUpdatedAt=nil;resourceDirectoryOptions=[];resourceDirectoriesError=nil}
-        if kind == .emby{library=[];sessions=[]};persist()
-        if kind == .emby{posterCache.removeAllObjects()}
+        let old=credential(kind),existing=profiles.first{$0.kind == kind}
+        let title=try ServerNamePolicy.normalized(name ?? existing?.displayName ?? kind.title)
+        let p=ServiceProfile(kind:kind,baseURL:url.absoluteString.trimmingCharacters(in:CharacterSet(charactersIn:"/")),username:username,allowActions:allowActions,name:title,enabled:existing?.enabled ?? true,migrationProtected:migrationProtected ?? existing?.migrationProtected)
+        var next=profiles
+        if let i=next.firstIndex(where:{$0.kind == kind}) { next[i]=p } else { next.append(p) }
+        try ConnectionProfileStore.validate(next)
+        if kind.isDownloader,let existing,existing.baseURL != p.baseURL || existing.username != p.username {
+            try preferences.removeBindings(to:kind)
+        }
+        try writeCredential(Credential(username:username,password:password,apiKey:apiKey),kind)
+        do { try persist(next) }
+        catch { rollbackCredentials([kind:old],ids:[kind]);throw error }
+        // Display-only changes never erase MP directory choices or bindings.
+        if kind == .moviepilot && (existing?.baseURL != p.baseURL || existing?.username != username || old.password != password || old.apiKey != apiKey) {
+            preferences.clearResourcePreferences(for:existing?.baseURL ?? p.baseURL)
+        }
+        invalidateConnection(kind)
     }
-    func disconnect(_ kind:ServiceKind) {
-        generation &+= 1
-        interactionEpoch=UUID()
-        if kind == .moviepilot { resourceConnectionEpoch=UUID() }
-        resetReadJobs()
-        if kind == .moviepilot || kind.isDownloader { preferences.clearResourcePreferences(for:profile(.moviepilot).baseURL) }
-        KeychainStore.delete(kind);clients[kind]=nil;snapshots[kind]=nil;dashboardSnapshots[kind]=nil
-        tasks.removeAll{$0.kind == kind}
-        if kind == .moviepilot { subscriptions=[];sites=[];searchResults=[];discoverySections=[];discoveryResults=[];discoveryError=nil;discoveryUpdatedAt=nil;resourceDirectoryOptions=[];resourceDirectoriesError=nil }
-        if kind == .emby { library=[];sessions=[] }
+    @discardableResult func createConnection(protocolKind:ServiceProtocol,name:String,baseURL:String,username:String,password:String,apiKey:String,allowActions:Bool,migrationProtected:Bool?=nil) throws -> ServiceID {
+        guard protocolKind.isDownloader || !profiles.contains(where:{$0.protocolKind == protocolKind}) else{throw AppError.message("此服务已存在，请编辑现有连接。")}
+        let id=ServiceID.make(protocolKind)
+        try saveConnection(id,baseURL:baseURL,username:username,password:password,apiKey:apiKey,allowActions:allowActions,name:name,migrationProtected:migrationProtected)
+        return id
+    }
+    func renameConnection(_ kind:ServiceKind,name:String) throws {
+        guard let i=profiles.firstIndex(where:{$0.kind == kind}) else{throw AppError.message("连接已移除。")}
+        var next=profiles;next[i].name=try ServerNamePolicy.normalized(name);try persist(next)
+    }
+    func setMigrationProtected(_ kind:ServiceKind,enabled:Bool) throws {
+        guard let i=profiles.firstIndex(where:{$0.kind == kind}) else{throw AppError.message("连接已移除。")}
+        var next=profiles;next[i].migrationProtected=enabled;try persist(next);generation &+= 1;interactionEpoch=UUID()
+    }
+    func setConnectionEnabled(_ kind:ServiceKind,enabled:Bool) throws {
+        guard let i=profiles.firstIndex(where:{$0.kind == kind}) else{throw AppError.message("连接已移除。")}
+        if enabled && credential(kind).isEmpty {throw AppError.message("请先保存此服务器的登录资料。")}
+        var next=profiles;next[i].enabled=enabled;try persist(next);invalidateConnection(kind)
+    }
+    /// Suspending a connection is local only; it retains credentials and permissions.
+    func disconnect(_ kind:ServiceKind) {do{try setConnectionEnabled(kind,enabled:false)}catch{message=Self.safeError(error)}}
+    func clearCredentials(_ kind:ServiceKind) throws {
+        guard let i=profiles.firstIndex(where:{$0.kind == kind}) else{throw AppError.message("连接已移除。")}
+        let old=profiles;var next=profiles;next[i].enabled=false;next[i].allowActions=false
+        try persist(next)
+        do {try deleteCredential(kind)}catch{try? persist(old);throw error}
+        invalidateConnection(kind)
+    }
+    func removeConnection(_ kind:ServiceKind) throws {
+        guard profiles.contains(where:{$0.kind == kind}) else{return}
+        try preferences.removeBindings(to:kind)
+        let old=profiles;try persist(profiles.filter{$0.kind != kind})
+        do {try deleteCredential(kind)}catch{try? persist(old);throw error}
+        invalidateConnection(kind)
+        // Stale group members are harmless (scope always intersects live IDs).
+        // Keep intent ledgers intact, including unknown previous submissions.
+        do{try preferences.removeServerFromGroups(kind)}catch{message=Self.safeError(error)}
+    }
+    private func invalidateConnection(_ kind:ServiceKind) {
+        generation &+= 1;interactionEpoch=UUID()
+        if kind == .moviepilot {resourceConnectionEpoch=UUID()}
+        clients[kind]?.cancelConnection()
+        resetReadJobs();clients[kind]=nil;snapshots[kind]=nil;dashboardSnapshots[kind]=nil;tasks.removeAll{$0.kind == kind}
+        if kind == .moviepilot{subscriptions=[];sites=[];searchResults=[];discoverySections=[];discoveryResults=[];discoveryError=nil;discoveryUpdatedAt=nil;resourceDirectoryOptions=[];resourceDirectoriesError=nil}
+        if kind == .emby{library=[];sessions=[]}
         if kind == .emby{posterCache.removeAllObjects()}
-        if let i=profiles.firstIndex(where:{$0.kind == kind}) { profiles[i].allowActions=false;profiles[i].username="" };persist()
     }
     private func client(_ kind:ServiceKind) throws -> APIClient {
         #if DEBUG
@@ -123,29 +230,38 @@ import LocalAuthentication
         #endif
         guard !locked else { throw AppError.message("请先解锁应用。") }
         guard isConfigured(kind) else { throw AppError.message("请先连接 \(kind.title)。") }
+        // Recheck the actual Keychain at a request boundary. A cached presence
+        // flag is never authorization to use an externally removed credential.
+        let value=credential(kind)
+        guard !value.isEmpty else {throw AppError.message("请先保存此服务器的登录资料。")}
         if let c=clients[kind] { return c }
-        let c=clientFactory(profile(kind),credential(kind));clients[kind]=c;return c
+        let c=clientFactory(profile(kind),value);clients[kind]=c;return c
     }
     static func safeError(_ error:Error)->String {
         if let e=error as? AppError { return e.localizedDescription }
         if let u=error as? URLError {
-            switch u.code { case .timedOut:return "连接超时。外出请先接通家庭 WireGuard。";case .notConnectedToInternet,.cannotConnectToHost,.cannotFindHost,.networkConnectionLost:return "无法连接服务。请检查家庭 Wi‑Fi 或 WireGuard。";case .cancelled:return "请求已取消。";case .serverCertificateUntrusted,.secureConnectionFailed:return "HTTPS 证书校验失败，请使用有效证书。";default:return "网络请求失败（\(u.code.rawValue)），未自动重试。" }
+            switch u.code { case .timedOut:return "连接超时，请检查服务器地址或 VPN。";case .notConnectedToInternet,.cannotConnectToHost,.cannotFindHost,.networkConnectionLost:return "无法连接服务，请检查网络、服务器或 VPN。";case .cancelled:return "请求已取消。";case .serverCertificateUntrusted,.secureConnectionFailed:return "HTTPS 证书校验失败，请使用有效证书。";default:return "网络请求失败（\(u.code.rawValue)），未自动重试。" }
         };return "请求未完成，未自动重试。请到原管理页核对状态。"
     }
     func refreshAll() async {
         guard !locked && !refreshRunning else { return };refreshRunning=true;defer{refreshRunning=false}
+        refreshCredentialAvailability()
         await refreshDashboard()
         if isConfigured(.moviepilot) { await refresh(.moviepilot) }
     }
     func refreshDashboard(manual:Bool = true) async {
         guard !locked && !Task.isCancelled else{return}
+        let scope=selectedDownloaderIDs.filter{isConfigured($0)}
+        if dashboardJob != nil && dashboardScope != scope {
+            dashboardJob?.cancel();dashboardJob=nil;dashboardCycle=nil
+        }
         if let job=dashboardJob {
             if manual { dashboardManualRefreshing=true }
             await job.value
             return
         }
         let cycle=UUID()
-        dashboardCycle=cycle;dashboardRefreshing=true;dashboardManualRefreshing=manual
+        dashboardCycle=cycle;dashboardScope=scope;dashboardRefreshing=true;dashboardManualRefreshing=manual
         let job=Task { @MainActor [weak self] in
             guard let self else{return}
             defer {
@@ -155,11 +271,20 @@ import LocalAuthentication
                 }
             }
             #if DEBUG
-            if self.uiFixtureMode { self.dashboardSnapshots=UITestFixtures.dashboard();return }
+            if self.uiFixtureMode { let values=UITestFixtures.dashboard();for kind in scope{self.dashboardSnapshots[kind]=values[kind]};return }
             #endif
+            // Read only the selected scope. Four workers avoid opening a burst
+            // of sessions when a user has a large seedbox fleet.
+            let kinds=scope
             await withTaskGroup(of:Void.self) { group in
-                for kind in ServiceKind.allCases where kind.isDownloader && self.isConfigured(kind) {
-                    group.addTask { await self.refreshDashboardService(kind) }
+                var index=0
+                for _ in 0..<min(4,kinds.count) {
+                    let kind=kinds[index];index += 1
+                    group.addTask {await self.refreshDashboardService(kind)}
+                }
+                while await group.next() != nil {
+                    if Task.isCancelled {group.cancelAll();break}
+                    if index < kinds.count {let kind=kinds[index];index += 1;group.addTask{await self.refreshDashboardService(kind)}}
                 }
             }
         }
@@ -170,10 +295,11 @@ import LocalAuthentication
         let g=generation
         do {
             let api=try client(kind)
-            let value=try await ReadBudget.run(seconds:readBudgetSeconds) { try await api.dashboard() }
-            guard g == generation && !locked else{return}
+            let gate=downloaderReadGate
+            let value=try await ReadBudget.run(seconds:readBudgetSeconds) {try await gate.read { try await api.dashboard() }}
+            guard g == generation && !locked && !Task.isCancelled && isConfigured(kind) else{return}
             dashboardSnapshots[kind]=value
-            snapshots[kind]=ServiceSnapshot(kind:kind,online:true,detail:kind.subtitle,downloadRate:value.downloadRate ?? 0,uploadRate:value.uploadRate ?? 0,taskCount:value.counts?.total)
+            snapshots[kind]=ServiceSnapshot(kind:kind,online:true,detail:kind.protocolKind.subtitle,downloadRate:value.downloadRate ?? 0,uploadRate:value.uploadRate ?? 0,taskCount:value.counts?.total)
         } catch {
             guard g == generation && !locked else{return}
             guard !Task.isCancelled && !(error is CancellationError) else{return}
@@ -184,7 +310,7 @@ import LocalAuthentication
     }
     func refresh(_ kind:ServiceKind) async {
         #if DEBUG
-        if uiFixtureMode { snapshots=UITestFixtures.snapshots();return }
+        if uiFixtureMode { if isConfigured(kind){snapshots[kind]=UITestFixtures.snapshots()[kind]};return }
         #endif
         let key="snapshot-"+kind.rawValue;guard !locked && !inflight.contains(key) && isConfigured(kind) else{return}
         inflight.insert(key);defer{inflight.remove(key)}
@@ -195,13 +321,33 @@ import LocalAuthentication
     @discardableResult func loadTasks(_ kind:ServiceKind) async -> Bool {
         guard kind.isDownloader else { return false }
         #if DEBUG
-        if uiFixtureMode { tasks.removeAll{$0.kind == kind};tasks.append(contentsOf:UITestFixtures.tasks(kind));return true }
+        if uiFixtureMode {
+            if ProcessInfo.processInfo.arguments.contains("--ui-fixture-slow-tasks") {
+                // Hold the old scope until the UI test switches groups. A fixed delay can
+                // expire while accessibility is still resolving the refresh control.
+                let originalScope = preferences.selectedGroupID
+                if preferences.selectedGroup?.name == "家庭" {
+                    for _ in 0..<120 {
+                        guard !Task.isCancelled else { return false }
+                        if preferences.selectedGroupID != originalScope { break }
+                        do { try await Task.sleep(nanoseconds:250_000_000) } catch { return false }
+                    }
+                } else {
+                    do { try await Task.sleep(nanoseconds:300_000_000) } catch { return false }
+                }
+            }
+            guard !Task.isCancelled && isConfigured(kind) else{return false}
+            tasks=tasks.filter{$0.kind != kind}+UITestFixtures.tasks(kind);return true
+        }
         #endif
         let key="tasks-"+kind.rawValue;guard !locked && !inflight.contains(key) else{return false};inflight.insert(key);busy=true;defer{inflight.remove(key);busy = !inflight.isEmpty};let g=generation
         do {
             let api=try client(kind)
-            let rows=try await ReadBudget.run(seconds:readBudgetSeconds) { try await api.tasks() }
-            guard g == generation && !locked && !Task.isCancelled else{return false};tasks.removeAll{$0.kind == kind};tasks.append(contentsOf:rows)
+            let gate=downloaderReadGate
+            let rows=try await ReadBudget.run(seconds:readBudgetSeconds) {
+                try await gate.read { try await api.tasks() }
+            }
+            guard g == generation && !locked && !Task.isCancelled else{return false};tasks=tasks.filter{$0.kind != kind}+rows
             if var s=snapshots[kind] { s.taskCount=rows.count;s.updatedAt=Date();snapshots[kind]=s }
             return true
         } catch {if g == generation{clients[kind]=nil;message=Self.safeError(error)};return false}
@@ -344,7 +490,7 @@ import LocalAuthentication
     func canDownloadResource(_ downloader:MPResourceDownloader)->Bool {
         guard canManage(.moviepilot),downloader.targetBaseURL != nil,
               let kind=preferences.boundDownloaderKind(for:downloader.bindingID,baseURL:profile(.moviepilot).baseURL),
-              downloader.compatibleKinds.contains(kind),canManage(kind) else{return false}
+              downloader.accepts(kind),canManage(kind) else{return false}
         return true
     }
     @discardableResult func downloadResource(_ request:MPResourceDownloadRequest) async -> Bool {
@@ -371,6 +517,7 @@ import LocalAuthentication
     }
     private func resourceDownloadAllowed(_ request:MPResourceDownloadRequest,generation:Int,kind:ServiceKind,target:ServiceProfile)->Bool {
         self.generation == generation && !Task.isCancelled && canDownloadResource(request.downloader) &&
+        !credential(.moviepilot).isEmpty && !credential(kind).isEmpty &&
         isCurrentResource(request.item) &&
         preferences.boundDownloaderKind(for:request.downloader.bindingID,baseURL:profile(.moviepilot).baseURL) == kind &&
         profile(kind).baseURL == target.baseURL && profile(kind).username == target.username
@@ -412,7 +559,7 @@ import LocalAuthentication
         catch {if g == generation{clients[.emby]=nil;message=Self.safeError(error)};return false}
     }
     private func guardAction(_ kind:ServiceKind) throws {
-        guard canManage(kind) else { throw AppError.message("此服务当前为只读。qB1/TR 迁移保护需要在迁移结束后解除。") }
+        guard canManage(kind),!credential(kind).isEmpty else { throw AppError.message("此服务当前为只读或已断开，请检查只读锁、管理权限与此服务器的迁移保护。") }
         guard !actionInFlight else { throw AppError.message("上一项操作尚未完成。请等待并核对结果。") }
     }
     func performTask(_ task:TorrentTask,start:Bool) async {
@@ -443,29 +590,77 @@ import LocalAuthentication
     }
     func webURL(_ kind:ServiceKind)->URL? {
         guard let base=try? EndpointPolicy.validate(profile(kind).baseURL) else{return nil}
-        if kind == .tr { return URL(string:base.absoluteString.trimmingCharacters(in:CharacterSet(charactersIn:"/"))+"/transmission/web/") }
+        if kind.isTR { return URL(string:ConnectionEndpointIdentity.key(base.absoluteString,kind:kind)+"/transmission/web/") }
         return base
     }
     private struct ImportFile:Decodable { var version:Int;var services:[ImportedService] }
-    private struct ImportedService:Decodable { var kind:ServiceKind;var baseURL:String;var username:String;var password:String?;var apiKey:String? }
+    private struct ImportedService:Decodable { var kind:ServiceKind?;var type:ServiceProtocol?;var name:String?;var baseURL:String;var username:String;var password:String?;var apiKey:String? }
     func importProfile(_ url:URL) throws {
         let size=(try url.resourceValues(forKeys:[.fileSizeKey])).fileSize ?? 0
-        guard size > 0 && size <= 65536 else{throw AppError.message("连接文件为空或超过 64KB。")}
+        let recovering=configurationError != nil
+        guard size > 0 && size <= 1_048_576 else{throw AppError.message("连接文件为空或超过 1MB。")}
         let input=try JSONDecoder().decode(ImportFile.self,from:Data(contentsOf:url))
-        guard input.version == 1 && !input.services.isEmpty && input.services.count <= 5 && Set(input.services.map{$0.kind}).count == input.services.count else{throw AppError.message("连接文件版本或服务清单无效。")}
-        for s in input.services { _=try EndpointPolicy.validate(s.baseURL);guard !(s.password ?? "").isEmpty || !(s.apiKey ?? "").isEmpty else{throw AppError.message("连接文件缺少登录资料。")};if (s.apiKey ?? "").isEmpty && s.username.isEmpty{throw AppError.message("连接文件缺少用户名。")}}
-        let oldProfiles=profiles;let old=Dictionary(uniqueKeysWithValues:input.services.map{($0.kind,credential($0.kind))})
-        do { for s in input.services { try saveConnection(s.kind,baseURL:s.baseURL,username:s.username,password:s.password ?? "",apiKey:s.apiKey ?? "",allowActions:false) } }
-        catch { profiles=oldProfiles;persist();for(k,v) in old { if v.isEmpty{KeychainStore.delete(k)}else{try? KeychainStore.write(v,kind:k)} };clients=[:];throw error }
+        guard [1,2].contains(input.version),!input.services.isEmpty,input.services.count <= 1000 else{throw AppError.message("连接文件版本或服务清单无效。")}
+        if input.version == 1 {guard input.services.count <= 5,input.services.allSatisfy({$0.kind?.isLegacy == true && $0.type == nil}) else{throw AppError.message("旧版连接文件服务清单无效。")}}
+        var next=recovering ? []:profiles,prepared:[(ServiceID,Credential)]=[],seen=Set<ServiceID>()
+        for s in input.services {
+            guard let type=s.type ?? s.kind?.protocolKind else{throw AppError.message("连接缺少服务器类型。")}
+            let id=s.kind ?? ServiceID.make(type)
+            guard id.protocolKind == type,seen.insert(id).inserted else{throw AppError.message("连接文件包含重复身份或类型不符。")}
+            let url=try EndpointPolicy.validate(s.baseURL),name=try ServerNamePolicy.normalized(s.name ?? profile(id).displayName)
+            let value=Credential(username:s.username,password:s.password ?? "",apiKey:s.apiKey ?? "")
+            guard !value.isEmpty,!value.apiKey.isEmpty || !value.username.isEmpty else{throw AppError.message("连接文件缺少登录资料。")}
+            let p=ServiceProfile(kind:id,baseURL:url.absoluteString.trimmingCharacters(in:CharacterSet(charactersIn:"/")),username:s.username,allowActions:false,name:name,migrationProtected:profiles.first{$0.kind == id}?.migrationProtected)
+            if let i=next.firstIndex(where:{$0.kind == id}){next[i]=p}else{next.append(p)}
+            prepared.append((id,value))
+        }
+        try ConnectionProfileStore.validate(next)
+        let endpoints=next.filter{$0.kind.isDownloader}.map{ConnectionEndpointIdentity.key($0.baseURL,kind:$0.kind)}
+        guard Set(endpoints).count == endpoints.count else{throw AppError.message("多个下载器不能指向同一入口。")}
+        let old=Dictionary(uniqueKeysWithValues:prepared.map{($0.0,credential($0.0))})
+        for (id,_) in prepared {try preferences.removeBindings(to:id)}
+        var written:[ServiceID]=[]
+        do {
+            for (id,value) in prepared {try writeCredential(value,id);written.append(id)}
+            if recovering {
+                // Import is an explicit user action. Preserve the malformed
+                // store before replacing it; normal startup never does this.
+                var backup:[String:Any]=[:]
+                for key in [ConnectionProfileStore.storageKey,ConnectionProfileStore.legacyStorageKey] {
+                    if let value=defaults.object(forKey:key){backup[key]=value}
+                }
+                guard !backup.isEmpty else{throw AppError.message("未找到可保留的原配置，恢复已停止。")}
+                let backupKey="profiles.recovery."+UUID().uuidString.lowercased()
+                defaults.set(backup,forKey:backupKey)
+                guard defaults.synchronize(),defaults.dictionary(forKey:backupKey) != nil else{throw AppError.message("无法保留原配置，恢复已停止。")}
+                try ConnectionProfileStore.save(next,defaults:defaults)
+                profiles=next;configurationError=nil;defaults.removeObject(forKey:"profiles.recoveryRequired")
+            } else {try persist(next)}
+        } catch {
+            rollbackCredentials(old,ids:written)
+            throw error
+        }
+        for (id,_) in prepared{invalidateConnection(id)}
         migrationProtection=true;readOnlyMode=true;message="已导入 \(input.services.count) 个连接，全局只读锁已开启，管理开关保持关闭。请删除“文件”中含密码的导入文件。"
+    }
+    private func rollbackCredentials(_ previous:[ServiceID:Credential],ids:[ServiceID]) {
+        var failed=false
+        for id in ids {
+            do {if let value=previous[id],!value.isEmpty{try writeCredential(value,id)}else{try deleteCredential(id)}}catch{failed=true}
+        }
+        if failed {
+            configurationError="登录资料恢复未完整完成，原配置已保留。请从备份重新导入连接；管理与自动连接保持关闭。"
+            defaults.set(configurationError,forKey:"profiles.recoveryRequired")
+            readOnlyMode=true;generation &+= 1;interactionEpoch=UUID();resetReadJobs();for client in clients.values{client.cancelConnection()};clients=[:]
+        }
     }
     func unlock() async {
         guard biometricEnabled else{locked=false;return}
         let context=LAContext();context.localizedCancelTitle="取消"
-        do { if try await context.evaluatePolicy(.deviceOwnerAuthentication,localizedReason:"解锁家庭媒体管理与登录资料") { locked=false;await refreshAll() } }
+        do { if try await context.evaluatePolicy(.deviceOwnerAuthentication,localizedReason:"解锁口袋蕾姆与登录资料") { locked=false;await refreshAll() } }
         catch { message="未解锁。可使用系统允许的生物识别或设备密码重试。" }
     }
-    private func actionAllowed(_ kind:ServiceKind,generation:Int)->Bool {self.generation == generation && canManage(kind)}
+    private func actionAllowed(_ kind:ServiceKind,generation:Int)->Bool {self.generation == generation && canManage(kind) && !credential(kind).isEmpty}
     func loadPoster(_ id:String) async -> Data? {
         guard !locked && isConfigured(.emby) else{return nil}
         if let d=posterCache.object(forKey:id as NSString){return d as Data}
@@ -524,6 +719,6 @@ import LocalAuthentication
         interactionEpoch=UUID()
         invalidateMPArtwork()
         dashboardJob?.cancel();discoveryJob?.cancel()
-        if biometricEnabled { locked=true };clients=[:]
+        if biometricEnabled { locked=true };for client in clients.values{client.cancelConnection()};clients=[:]
     }
 }

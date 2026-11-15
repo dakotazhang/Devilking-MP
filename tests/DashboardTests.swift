@@ -203,7 +203,7 @@ final class DashboardTests: XCTestCase {
     func testTRTaskFiltersMatchDashboardCategoryCountsAndUnknownNeverBecomeSeeding() throws {
         let rows: [[String: Any]] = (0...7).map { ["status": $0, "error": $0 == 6 ? 2 : 0, "percentDone": 1.0, "leftUntilDone": 0] }
         let counts = try DashboardParser.trCounts(rows)
-        let tasks = rows.map(TaskParser.tr)
+        let tasks = rows.map { TaskParser.tr($0) }
         for filter in DashboardTaskFilter.allCases {
             XCTAssertEqual(tasks.filter { filter.includes($0) }.count, counts[filter], filter.rawValue)
         }

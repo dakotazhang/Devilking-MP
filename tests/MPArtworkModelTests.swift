@@ -42,10 +42,12 @@ final class MPArtworkModelTests:XCTestCase {
     override func setUp() {super.setUp();ModelArtworkHTTP.state.reset()}
 
     @MainActor private func model(_ defaults:UserDefaults)->AppModel {
-        let config=URLSessionConfiguration.ephemeral
-        config.protocolClasses=[ModelArtworkHTTP.self]
-        let session=URLSession(configuration:config)
-        let model=AppModel(defaults:defaults,credentialReader:{$0 == .moviepilot ? Credential(username:"fixture",password:"",apiKey:"fixture-only") : Credential()},clientFactory:{APIClient(profile:$0,credentials:$1,session:session)},readBudgetSeconds:1)
+        let model=AppModel(defaults:defaults,credentialReader:{$0 == .moviepilot ? Credential(username:"fixture",password:"",apiKey:"fixture-only") : Credential()},clientFactory:{ profile,credential in
+            // Match production ownership: reconnecting creates a fresh session.
+            let config=URLSessionConfiguration.ephemeral
+            config.protocolClasses=[ModelArtworkHTTP.self]
+            return APIClient(profile:profile,credentials:credential,session:URLSession(configuration:config))
+        },readBudgetSeconds:1)
         model.profiles=[ServiceProfile(kind:.moviepilot,baseURL:"http://192.168.40.20:3000",username:"fixture")]
         return model
     }
@@ -123,7 +125,7 @@ final class MPArtworkModelTests:XCTestCase {
         _=await model.loadMPArtwork(other)
         XCTAssertEqual(ModelArtworkHTTP.state.calls(),3,"Other visible posters must retain their cache")
     }
-    @MainActor func testChangingConnectionCannotReuseThePriorAccountsImageCache() async {
+    @MainActor func testChangingConnectionCannotReuseThePriorAccountsImageCache() async throws {
         let suite="ArtworkModel."+UUID().uuidString,defaults=UserDefaults(suiteName:suite)!
         defer{defaults.removePersistentDomain(forName:suite)}
         let model=model(defaults)
@@ -132,6 +134,10 @@ final class MPArtworkModelTests:XCTestCase {
         model.disconnect(.moviepilot)
         XCTAssertNotEqual(epoch,model.resourceConnectionEpoch)
         _=await model.loadMPArtwork(poster)
+        XCTAssertEqual(ModelArtworkHTTP.state.calls(),1,"A suspended connection must not fetch a poster")
+        try model.setConnectionEnabled(.moviepilot,enabled:true)
+        let resumed=await model.loadMPArtwork(poster)
+        XCTAssertEqual(resumed,ModelArtworkHTTP.png)
         XCTAssertEqual(ModelArtworkHTTP.state.calls(),2)
     }
     @MainActor func testBackgroundCancelsPendingImageWithoutKeepingStaleBytes() async {

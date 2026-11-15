@@ -49,9 +49,13 @@ final class RefreshRegressionTests:XCTestCase {
     }
     @MainActor private func model(_ defaults:UserDefaults,kind:ServiceKind,budget:TimeInterval=0.12)->AppModel {
         let session=session()
-        return AppModel(defaults:defaults,credentialReader: { k in
+        let model=AppModel(defaults:defaults,credentialReader: { k in
             k == kind ? Credential(username:"fixture",password:"",apiKey:"fixture-only") : Credential()
         },clientFactory:{ APIClient(profile:$0,credentials:$1,session:session) },readBudgetSeconds:budget)
+        // A recovery-only Keychain entry intentionally stays suspended until its
+        // actual endpoint is confirmed. This test supplies an explicit fixture.
+        model.profiles=[ServiceProfile(kind:kind,baseURL:kind.defaultURL,username:"fixture")]
+        return model
     }
     func testWholeReadBudgetTerminatesCancellableSlowWork() async {
         let start=Date()

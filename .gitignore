@@ -8,6 +8,7 @@ xcuserdata/
 *.devilking.json
 *.dkmp
 !examples/connection.example.dkmp
+!examples/connection.v2.example.dkmp
 .env
 .env.*
 *.mobileprovision

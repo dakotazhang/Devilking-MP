@@ -6,6 +6,7 @@ struct SettingsView: View {
     @EnvironmentObject private var preferences: AppPreferences
     @State private var editingService: ServiceKind?
     @State private var importing = false
+    @State private var addingService = false
     @State private var confirmingMigrationUnlock = false
     @State private var importError: String?
     @State private var confirmingBiometric = false
@@ -15,19 +16,19 @@ struct SettingsView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    DKCharacterHeader()
-                    accountHeader
+                    about
                     resources
                     appearance
                     dashboardModules
                     protection
                     privacy
-                    about
+                    accountHeader
                 }.padding(18)
             }
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(item: $editingService) { kind in ConnectionEditorView(kind: kind) }
+            .sheet(isPresented: $addingService) { ConnectionEditorView() }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.json], allowsMultipleSelection: false) { result in
                 do {
                     guard let url = try result.get().first else { return }
@@ -43,13 +44,13 @@ struct SettingsView: View {
                 Button("保持保护", role: .cancel) {}
                 Button("确认迁移已结束，关闭保护", role: .destructive) { model.migrationProtection = false }
             } message: {
-                Text("仅当 qB1 → TR 批量校验和交接已经完成，且你确认可以管理这两个下载器时再关闭。关闭后仍需分别启用服务操作权限，每次写入仍会确认。")
+                Text("仅当受保护下载器的批量校验和交接已经完成，且你确认可以管理它们时再关闭。关闭后仍需分别启用服务操作权限，每次写入仍会确认。")
             }
             .alert("关闭全局只读锁？", isPresented: $confirmingReadOnlyUnlock) {
                 Button("保持只读", role: .cancel) {}
                 Button("确认开启管理模式") { model.readOnlyMode = false }
             } message: {
-                Text("关闭后，只有已单独授权的服务才能操作。qB1 / TR 仍受迁移保护限制，每次启停、限速或订阅都需要再次确认。可以随时重新开启只读锁。")
+                Text("关闭后，只有已单独授权的服务才能操作。受保护的下载器仍受迁移保护限制，每次启停、限速或订阅都需要再次确认。可以随时重新开启只读锁。")
             }
             .alert("启用身份验证？", isPresented: $confirmingBiometric) {
                 Button("取消", role: .cancel) {}
@@ -65,14 +66,7 @@ struct SettingsView: View {
 
     private var accountHeader: some View {
         DKCard {
-            HStack(spacing: 14) {
-                Image("BrandMark").resizable().scaledToFill().frame(width: 50, height: 50).clipShape(RoundedRectangle(cornerRadius: 14))
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Devilking MP管理").font(.headline)
-                    Text("家庭专用 · 本机安全存储").font(.caption).foregroundStyle(DKTheme.muted)
-                }
-                Spacer()
-            }
+            DKSectionTitle(title: "连接配置")
             Button { importing = true } label: {
                 Label("从文件导入连接配置", systemImage: "square.and.arrow.down")
                     .frame(maxWidth: .infinity).padding(.vertical, 4)
@@ -84,19 +78,34 @@ struct SettingsView: View {
 
     private var connections: some View {
         VStack(spacing: 12) {
-            DKSectionTitle(title: "服务连接", subtitle: "独立配置五个服务；日常默认只读。")
-            ForEach(ServiceKind.allCases) { kind in
+            DKSectionTitle(title: "服务连接", subtitle: "下载器可重复添加；每个实例独立保存账号、名称和权限。")
+            if let error = model.configurationError {
+                DKCard {
+                    Label("服务器配置未读到", systemImage: "exclamationmark.triangle").foregroundStyle(DKTheme.amber)
+                    Text(error).font(.caption).foregroundStyle(DKTheme.muted)
+                    Text("原本机配置保留，未自动重置。请先检查连接配置，再恢复访问。")
+                        .font(.caption).foregroundStyle(DKTheme.muted)
+                }.accessibilityIdentifier("servers.configurationError")
+            }
+            Button { addingService = true } label: {
+                Label("添加服务器", systemImage: "plus.circle.fill").frame(maxWidth: .infinity).frame(minHeight: 44)
+            }.buttonStyle(.borderedProminent).accessibilityIdentifier("settings.addServer").disabled(model.configurationError != nil)
+            if model.profiles.isEmpty {
+                DKCard { DKEmptyState(symbol: "server.rack", title: "还没有服务器", detail: "添加 qBittorrent、Transmission、MoviePilot 或 Emby。名称和分组都由你决定。") }
+            }
+            ForEach(model.profiles) { profile in
+                let kind = profile.kind
                 Button { editingService = kind } label: {
                     DKCard {
                         HStack(spacing: 12) {
                             Image(systemName: kind.symbol).font(.title2).foregroundStyle(DKTheme.accent).frame(width: 32)
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(LocalizedStringKey(kind.compactTitle)).font(.headline).foregroundStyle(DKTheme.text)
-                                Text(LocalizedStringKey(connectionDescription(kind))).font(.caption).foregroundStyle(DKTheme.muted).lineLimit(1)
+                                Text(verbatim: profile.displayName).font(.headline).foregroundStyle(DKTheme.text)
+                                Text(verbatim: connectionDescription(kind)).font(.caption).foregroundStyle(DKTheme.muted).lineLimit(1)
                             }
                             Spacer(minLength: 0)
                             VStack(alignment: .trailing, spacing: 6) {
-                                Text(LocalizedStringKey(model.isConfigured(kind) ? "已配置" : "添加连接")).font(.caption).foregroundStyle(model.isConfigured(kind) ? DKTheme.green : DKTheme.accent)
+                                Text(LocalizedStringKey(model.isConfigured(kind) ? "连接已启用" : model.hasSavedCredentials(kind) ? "已断开" : "待填写凭据")).font(.caption).foregroundStyle(model.isConfigured(kind) ? DKTheme.accent : DKTheme.muted)
                                 if model.isConfigured(kind) {
                                     Text(LocalizedStringKey(model.canManage(kind) ? "可管理" : model.profile(kind).allowActions ? "权限已保存 · 当前只读" : "仅查看")).font(.caption2).foregroundStyle(DKTheme.muted)
                                 }
@@ -104,7 +113,7 @@ struct SettingsView: View {
                             Image(systemName: "chevron.right").font(.caption2).foregroundStyle(DKTheme.muted)
                         }
                     }
-                }.buttonStyle(.plain)
+                }.buttonStyle(.plain).accessibilityIdentifier("servers.connection." + kind.rawValue)
             }
         }
     }
@@ -116,6 +125,11 @@ struct SettingsView: View {
                 ScrollView { connections.padding(18) }
                     .navigationTitle("服务器设置").navigationBarTitleDisplayMode(.inline).dkScreen()
             } label: { Label("服务器设置", systemImage: "server.rack").frame(minHeight: 36) }
+            .accessibilityIdentifier("settings.servers")
+            Divider()
+            NavigationLink { ServerGroupsSettingsView() } label: {
+                Label("服务器分组", systemImage: "folder.badge.gearshape").frame(minHeight: 36)
+            }.accessibilityIdentifier("settings.groups")
             Divider()
             NavigationLink { DownloadDirectorySettingsView() } label: {
                 Label("预设下载目录", systemImage: "folder.fill").frame(minHeight: 36)
@@ -139,7 +153,7 @@ struct SettingsView: View {
                     .accessibilityValue(preferences.text(preferences.refreshInterval == 0 ? "关闭自动刷新" : "\(preferences.refreshInterval) 秒"))
                     .accessibilityIdentifier("settings.refreshInterval")
             }.frame(minHeight: 44)
-            Text("仅在 App 前台刷新仪表盘与当前下载器列表；关闭后仍可手动刷新。发现页下拉刷新，搜索结果不会被定时刷新覆盖。")
+            Text("仅在 App 前台刷新状态表与当前下载器列表；关闭后仍可手动刷新。发现页下拉刷新，搜索结果不会被定时刷新覆盖。")
                 .font(.caption).foregroundStyle(DKTheme.muted)
         }
     }
@@ -188,12 +202,12 @@ struct SettingsView: View {
 
     private var dashboardModules: some View {
         DKCard {
-            DKSectionTitle(title: "仪表盘定制", subtitle: "模块展示")
+            DKSectionTitle(title: "状态表定制", subtitle: "模块展示")
             ForEach(DashboardModule.allCases) { module in
                 Toggle(LocalizedStringKey(module.title), isOn: Binding(get: { preferences.isVisible(module) }, set: { preferences.setVisible(module, $0) }))
                     .tint(DKTheme.accent).accessibilityIdentifier("settings.module.\(module.rawValue)")
             }
-            Text("只改变本机仪表盘展示，不影响服务运行或下载任务。")
+            Text("只改变本机状态表展示，不影响服务运行或下载任务。")
                 .font(.caption).foregroundStyle(DKTheme.muted)
         }
     }
@@ -206,15 +220,15 @@ struct SettingsView: View {
             })) {
                 Label("全局只读锁", systemImage: "lock.fill")
             }.tint(DKTheme.accent).accessibilityIdentifier("settings.readOnlyMode")
-            Text("开启后可以浏览仪表盘、搜索影视和查看任务；订阅、启停与限速等写操作全部锁定。关闭需要确认，单个服务仍需另外授权。")
+            Text("开启后可以浏览状态表、搜索影视和查看任务；订阅、启停与限速等写操作全部锁定。关闭需要确认，单个服务仍需另外授权。")
                 .font(.caption).foregroundStyle(DKTheme.muted)
             Divider().overlay(.white.opacity(0.05))
             Toggle(isOn: Binding(get: { model.migrationProtection }, set: { enabled in
                 if enabled { model.migrationProtection = true } else { confirmingMigrationUnlock = true }
             })) {
-                Label("qB1 / TR 迁移保护", systemImage: "lock.shield")
+                Label("下载器迁移保护", systemImage: "lock.shield")
             }.tint(DKTheme.accent)
-            Text("保护开启时，只读取校验与任务状态，不从 App 启停 qB1 / TR 或修改其上传上限。")
+            Text("保护开启时，已标记的下载器只能查看校验与任务状态，不能启停或修改上传上限。")
                 .font(.caption).foregroundStyle(DKTheme.muted)
             Divider().overlay(.white.opacity(0.05))
             Text("App 不提供删种、删除文件、移动数据、强制校验或批量重播功能。复杂操作请进入原服务管理页面核对。")
@@ -233,31 +247,22 @@ struct SettingsView: View {
             Text("切换到其他 App 时自动遮盖服务内容。凭据不写入 iCloud 配置或应用日志。")
                 .font(.caption).foregroundStyle(DKTheme.muted)
             Divider().overlay(.white.opacity(0.05))
-            Label("在外先连家庭 VPN", systemImage: "network.badge.shield.half.filled").font(.subheadline.weight(.medium))
-            Text("本应用直接访问你填写的服务地址。使用内网地址时，请先连接家庭 VPN；不需要把下载器、Emby 或 MoviePilot 新增映射到公网。")
+            Label("按自己的网络方式连接", systemImage: "network.badge.shield.half.filled").font(.subheadline.weight(.medium))
+            Text("App 直连你配置的服务器，无中转后台、统计 SDK 或广告。使用内网地址时，请先连接自己的 VPN。MP 资料与站点请求由你的服务端处理。")
                 .font(.caption).foregroundStyle(DKTheme.muted)
         }
     }
 
     private var about: some View {
         DKCard {
-            DKSectionTitle(title: "关于")
-            DKInfoRow(title: "版本", value: version)
-            DKInfoRow(title: "兼容", value: "iOS 16.1 及以上")
-            DKInfoRow(title: "家庭分工", value: "qB1 下载 · qB2 备用 · TR 保种")
-            Text("前台刷新状态，不承诺 iOS 后台常驻监控。原有 MoviePilot、IYUU 与迁移流程继续独立运行。")
-                .font(.caption).foregroundStyle(DKTheme.muted)
+            NavigationLink { PocketRemAboutView() } label: {
+                Label("关于口袋蕾姆", systemImage: "info.circle").frame(minHeight: 44)
+            }.accessibilityIdentifier("settings.about")
         }
     }
 
-    private var version: String {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
-        return "\(version) (\(build))"
-    }
-
     private func connectionDescription(_ kind: ServiceKind) -> String {
-        guard model.isConfigured(kind) else { return kind.subtitle }
+        guard !model.profile(kind).baseURL.isEmpty else { return kind.protocolKind.subtitle }
         guard let parts = URLComponents(string: model.profile(kind).baseURL), let host = parts.host else { return "已保存连接" }
         return parts.port.map { "\(host):\($0)" } ?? host
     }
@@ -278,7 +283,7 @@ private struct DownloaderBindingsSettingsView: View {
                     DKSectionTitle(title: "这一步是做什么？")
                     Text("告诉 App：MoviePilot 中的下载器，是你在“服务器设置”里添加的哪一台。确认后，才能把任务发到正确位置，并遵守这台下载器的操作保护。")
                         .font(.subheadline).foregroundStyle(DKTheme.muted)
-                    Text("例如：MP 的“主力下载器”与 App 的“家庭 qB1”实际是同一台，就选择“家庭 qB1”。如果不是同一台，请不要这样选择。")
+                    Text("例如：MP 的“主力下载器”与 App 中你命名的“家中下载器”实际是同一台，就选择它。不同服务器不要互相绑定。")
                         .font(.subheadline)
                     Text("不确定时保持“暂不选择”。确认身份只保存本机设置，不会修改 MP，也不会开始下载。")
                         .font(.caption).foregroundStyle(DKTheme.muted)
@@ -300,7 +305,7 @@ private struct DownloaderBindingsSettingsView: View {
                             })) {
                                 Text("暂不选择").tag(ServiceKind?.none)
                                 ForEach(availableKinds(for: downloader)) { kind in
-                                    Text(LocalizedStringKey(kind.compactTitle)).tag(Optional(kind))
+                                    Text(verbatim: model.profile(kind).displayName).tag(Optional(kind))
                                 }
                             }.pickerStyle(.menu).labelsHidden().accessibilityLabel("App 中的同一台下载器")
                         }.frame(minHeight: 44)
@@ -327,13 +332,13 @@ private struct DownloaderBindingsSettingsView: View {
 
     private func availableKinds(for downloader: MPResourceDownloader) -> [ServiceKind] {
         guard downloader.canBind else { return [] }
-        let kinds: [ServiceKind]
+        let protocolKind: ServiceProtocol
         switch downloader.type.lowercased() {
-        case "qbittorrent": kinds = [.qb1, .qb2]
-        case "transmission": kinds = [.tr]
-        default: kinds = []
+        case "qbittorrent": protocolKind = .qbittorrent
+        case "transmission": protocolKind = .transmission
+        default: return []
         }
-        return kinds.filter { model.isConfigured($0) }
+        return model.downloaderProfiles.filter { $0.protocolKind == protocolKind && model.isConfigured($0.kind) }.map(\.kind)
     }
 
     private func load() async {
@@ -402,118 +407,5 @@ private struct DownloadDirectorySettingsView: View {
             }.frame(minHeight: 44)
         }.buttonStyle(.plain).disabled(model.locked)
             .accessibilityAddTraits(selection == id ? .isSelected : [])
-    }
-}
-
-private struct ConnectionEditorView: View {
-    @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var preferences: AppPreferences
-    @Environment(\.dismiss) private var dismiss
-    let kind: ServiceKind
-    @State private var address = ""
-    @State private var username = ""
-    @State private var password = ""
-    @State private var apiKey = ""
-    @State private var allowActions = false
-    @State private var confirmingActions = false
-    @State private var confirmingDisconnect = false
-    @State private var saveError: String?
-    @State private var loaded = false
-
-    private var supportsAPIKey: Bool { kind == .moviepilot || kind == .emby }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("服务地址", text: $address).keyboardType(.URL)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .accessibilityLabel("服务完整地址")
-                    Text("填写 http:// 或 https:// 开头的完整地址。家庭内网与 VPN 使用相同地址即可。")
-                        .font(.caption).foregroundStyle(DKTheme.muted)
-                } header: { Text(preferences.text(kind.compactTitle) + " · " + preferences.text("连接地址")) }
-
-                Section("身份凭据") {
-                    TextField("用户名", text: $username).textContentType(.username)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive()
-                    SecureField("密码", text: $password).textContentType(.password).privacySensitive()
-                    if supportsAPIKey {
-                        SecureField("API Key / Token（可选）", text: $apiKey)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive()
-                    }
-                    Text(LocalizedStringKey(supportsAPIKey ? "可使用账号密码，或服务支持的 API Key。凭据保存在本机钥匙串中。" : "账号密码仅存本机钥匙串，不包含在普通连接设置中。"))
-                        .font(.caption).foregroundStyle(DKTheme.muted)
-                }
-
-                Section("操作权限") {
-                    Toggle(isOn: Binding(get: { allowActions }, set: { enabled in
-                        if enabled { confirmingActions = true } else { allowActions = false }
-                    })) { Text("允许从 App 操作此服务") }.tint(DKTheme.accent)
-                    Text(LocalizedStringKey(permissionDescription)).font(.caption).foregroundStyle(DKTheme.muted)
-                    if model.readOnlyMode {
-                        Label("全局只读锁已开启，保存此授权后仍保持只读。", systemImage: "lock.fill")
-                            .font(.caption).foregroundStyle(DKTheme.amber)
-                    }
-                    if model.migrationProtection && (kind == .qb1 || kind == .tr) {
-                        Label("迁移保护开启，保存授权后仍保持只读。", systemImage: "lock.shield")
-                            .font(.caption).foregroundStyle(DKTheme.amber)
-                    }
-                }
-
-                Section {
-                    Button("保存连接") { save() }.frame(maxWidth: .infinity).font(.headline)
-                        .disabled(address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                if model.isConfigured(kind) {
-                    Section {
-                        DKServiceLink(kind: kind)
-                        Button("清除本机连接与凭据", role: .destructive) { confirmingDisconnect = true }
-                    } footer: { Text("仅清除本机保存的连接，不会修改服务器或下载任务。") }
-                }
-            }
-            .scrollContentBackground(.hidden).background(DKTheme.background)
-            .navigationTitle(Text(LocalizedStringKey(kind.compactTitle))).navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
-            .onAppear(perform: load)
-            .alert("启用此服务的操作权限？", isPresented: $confirmingActions) {
-                Button("保持只读", role: .cancel) {}
-                Button("允许操作") { allowActions = true }
-            } message: { Text(preferences.text(permissionDescription) + "\n" + preferences.text("每次实际操作仍需确认。此授权将在保存连接后生效。")) }
-            .alert("清除此连接？", isPresented: $confirmingDisconnect) {
-                Button("取消", role: .cancel) {}
-                Button("清除本机配置", role: .destructive) { model.disconnect(kind); dismiss() }
-            } message: { Text(preferences.text(kind.compactTitle) + "\n" + preferences.text("本机凭据会从钥匙串中移除；服务器上的数据保留。")) }
-            .alert("连接未保存", isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
-                Button("知道了", role: .cancel) { saveError = nil }
-            } message: { Text(saveError ?? "") }
-        }.tint(DKTheme.accent)
-    }
-
-    private var permissionDescription: String {
-        switch kind {
-        case .qb1, .qb2, .tr: return "允许单个任务启动、停止和全局上传限速；不包含删除、移动与强制校验。"
-        case .moviepilot: return "允许确认后新增影视订阅，以及暂停或恢复现有订阅；已发出的资源搜索不会因此取消。"
-        case .emby: return "允许修改当前用户的收藏与已看状态；不包含删除影片。"
-        }
-    }
-
-    private func load() {
-        guard !loaded else { return }
-        loaded = true
-        let profile = model.profile(kind)
-        let credential = model.credential(kind)
-        address = profile.baseURL
-        username = credential.username.isEmpty ? profile.username : credential.username
-        password = credential.password
-        apiKey = credential.apiKey
-        allowActions = profile.allowActions
-    }
-
-    private func save() {
-        do {
-            try model.saveConnection(kind, baseURL: address, username: username, password: password, apiKey: apiKey, allowActions: allowActions)
-            dismiss()
-            Task { await model.refresh(kind) }
-        } catch { saveError = AppModel.safeError(error) }
     }
 }

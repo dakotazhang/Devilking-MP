@@ -68,8 +68,8 @@ struct DKCharacterBackdrop: View {
     }
 }
 
-/// A small reserved area in each main page's scroll content keeps the face
-/// visible. It scrolls away normally and never overlaps controls or posters.
+/// Only the status page reserves a branded header. The other pages keep their
+/// character behind the content, leaving controls and poster grids unobstructed.
 struct DKCharacterHeader: View {
     @EnvironmentObject private var preferences: AppPreferences
     @Environment(\.dkPageCharacter) private var character
@@ -77,16 +77,17 @@ struct DKCharacterHeader: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
-        if preferences.characterBackgroundsEnabled, !reduceTransparency, let character {
+        if preferences.characterBackgroundsEnabled, !reduceTransparency, let character, character == .rem {
             GeometryReader { geometry in
                 let artworkWidth = min(224, max(196, geometry.size.width * 0.58))
                 ZStack(alignment: .topTrailing) {
-                    DKTheme.background
+                    DKTheme.background.accessibilityHidden(true)
                     Image(character.assetName)
                         .resizable()
                         .scaledToFit()
                         .frame(width: artworkWidth, height: artworkWidth * 1672 / 941)
                         .opacity(colorScheme == .dark ? 0.90 : 1)
+                        .accessibilityHidden(true)
                         .mask {
                             LinearGradient(stops: [
                                 .init(color: .clear, location: 0),
@@ -98,24 +99,30 @@ struct DKCharacterHeader: View {
                         .init(color: .clear, location: 0.88),
                         .init(color: DKTheme.background, location: 1)
                     ], startPoint: .top, endPoint: .bottom)
+                    .accessibilityHidden(true)
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topTrailing)
+                .clipped()
+                .overlay(alignment: .leading) {
+                    // The portrait's tall intrinsic size must not determine the
+                    // title's center. Lay the text out against the visible header.
+                    Text("口袋蕾姆")
+                        .font(.system(size: 29, weight: .bold, design: .rounded))
+                        .foregroundStyle(DKTheme.text)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.75)
+                        .frame(width: max(0, geometry.size.width * 0.55 - 12), alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("character.homeTitle")
+                        .padding(.leading, 12)
+                        .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
+                }
                 .clipped()
             }
             .frame(height: 128)
             .allowsHitTesting(false)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("页面角色装饰")
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("character.header." + character.rawValue)
-            .accessibilityHidden(!uiFixtureActive)
         }
-    }
-
-    private var uiFixtureActive: Bool {
-        #if DEBUG
-        return ProcessInfo.processInfo.arguments.contains("--ui-fixture")
-        #else
-        return false
-        #endif
     }
 }

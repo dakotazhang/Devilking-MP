@@ -3,7 +3,7 @@ import Security
 
 enum EndpointPolicy {
     static func validTaskID(_ value:String,kind:ServiceKind)->Bool {
-        let lengths = kind == .tr ? [40]:[40,64]
+        let lengths = kind.protocolKind == .transmission ? [40]:[40,64]
         return lengths.contains(value.count) && value.unicodeScalars.allSatisfy{("0123456789abcdefABCDEF").unicodeScalars.contains($0)}
     }
     static func validate(_ raw: String) throws -> URL {
@@ -21,9 +21,17 @@ enum EndpointPolicy {
     }
 }
 final class SameOriginDelegate: NSObject, URLSessionTaskDelegate {
+    private func origin(_ url: URL) -> String? {
+        guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = url.host?.lowercased(), !host.isEmpty,
+              url.user == nil, url.password == nil else { return nil }
+        let port = url.port ?? (scheme == "https" ? 443 : 80)
+        return scheme + "://" + host + ":" + String(port)
+    }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         // Never forward credentials or read results across origins, even to another LAN host.
-        guard let a=task.originalRequest?.url, let b=request.url, a.scheme == b.scheme, a.host == b.host, a.port == b.port else { completionHandler(nil); return }
+        guard let a=task.originalRequest?.url, let b=request.url,
+              let source=origin(a), let destination=origin(b), source == destination else { completionHandler(nil); return }
         completionHandler(request)
     }
 }
@@ -43,5 +51,12 @@ enum KeychainStore {
         if result == errSecItemNotFound { var add=q;attrs.forEach{add[$0.key]=$0.value}; guard SecItemAdd(add as CFDictionary,nil) == errSecSuccess else { throw AppError.message("无法保存到手机钥匙串。") } }
         else if result != errSecSuccess { throw AppError.message("无法更新手机钥匙串。") }
     }
-    static func delete(_ kind:ServiceKind) { SecItemDelete([kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:kind.rawValue] as CFDictionary) }
+    static func deleteVerified(_ kind: ServiceID) throws {
+        let result = SecItemDelete([kSecClass as String: kSecClassGenericPassword,
+                                   kSecAttrService as String: service,
+                                   kSecAttrAccount as String: kind.rawValue] as CFDictionary)
+        guard result == errSecSuccess || result == errSecItemNotFound else { throw AppError.message("无法清除手机钥匙串中的登录资料，原连接配置已保留。") }
+    }
+    /// Legacy source compatibility; destructive UI paths use the verified result.
+    static func delete(_ kind: ServiceKind) { try? deleteVerified(kind) }
 }

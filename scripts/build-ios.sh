@@ -3,6 +3,12 @@ set -euo pipefail
 
 task_mode="${1:-all}"
 case "$task_mode" in test|archive|all) ;; *) echo 'Usage: build-ios.sh [test|archive|all]' >&2; exit 2 ;; esac
+test_scope="${IOS_TEST_SCOPE:-all}"
+case "$test_scope" in all|connection-lifecycle|tab-performance) ;; *) echo 'IOS_TEST_SCOPE must be all, connection-lifecycle or tab-performance.' >&2; exit 2 ;; esac
+if [[ "$task_mode" == archive && "$test_scope" != all ]]; then
+  echo 'A focused UI diagnostic cannot create a device archive.' >&2
+  exit 2
+fi
 task_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$task_root"
 mkdir -p build
@@ -12,15 +18,23 @@ xcodegen generate --spec ios/project.yml --project ios
 if [[ "$task_mode" == test || "$task_mode" == all ]]; then
   simulator_id="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; j=json.load(sys.stdin); candidates=[(runtime,d["udid"]) for runtime,devices in j["devices"].items() if ".iOS-" in runtime for d in devices if d.get("isAvailable",False) and "iPhone" in d.get("name","")]; candidates.sort(reverse=True); print(candidates[0][1] if candidates else "")')"
   [[ -n "$simulator_id" ]] || { echo 'No available iPhone simulator in this Xcode runner.' >&2; exit 3; }
+  set --
+  if [[ "$test_scope" == connection-lifecycle ]]; then
+    set -- '-only-testing:DevilkingMPUITests/UITests/testConnectionLifecycleKeepsCredentialsAndGroupsDoNotRemoveServers'
+  elif [[ "$test_scope" == tab-performance ]]; then
+    set -- '-only-testing:DevilkingMPUITests/UITabPerformanceRegressionTests'
+  fi
+  echo "Running test scope: $test_scope" | tee build/test.log
   xcodebuild -project ios/DevilkingMP.xcodeproj -scheme DevilkingMP \
     -configuration Debug -destination "platform=iOS Simulator,id=$simulator_id" \
     -derivedDataPath build/DerivedData -resultBundlePath build/CoreTests.xcresult \
     -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
+    "$@" \
     CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM="" \
-    test 2>&1 | tee build/test.log
+    test 2>&1 | tee -a build/test.log
 fi
 
-if [[ "$task_mode" == archive || "$task_mode" == all ]]; then
+if [[ "$test_scope" == all && ( "$task_mode" == archive || "$task_mode" == all ) ]]; then
   xcodebuild -project ios/DevilkingMP.xcodeproj -scheme DevilkingMP \
     -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
     -archivePath build/DevilkingMP.xcarchive -derivedDataPath build/DerivedData \

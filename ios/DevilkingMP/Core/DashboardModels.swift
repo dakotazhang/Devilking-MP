@@ -122,7 +122,7 @@ enum DashboardParser {
         var result = DashboardTaskCounts()
         for row in rows {
             guard let state = row["state"] as? String, !state.isEmpty else {
-                throw AppError.message("qB 任务状态缺失，未更新仪表盘统计。")
+                throw AppError.message("qB 任务状态缺失，未更新状态表统计。")
             }
             result.total += 1
             let localError = ["error", "missingFiles"].contains(state)
@@ -147,7 +147,7 @@ enum DashboardParser {
         for row in rows {
             guard let status = number(row["status"]), status.rounded(.towardZero) == status,
                   let error = number(row["error"]), error.rounded(.towardZero) == error else {
-                throw AppError.message("TR 任务状态或错误标记缺失，未更新仪表盘统计。")
+                throw AppError.message("TR 任务状态或错误标记缺失，未更新状态表统计。")
             }
             result.total += 1
             if error > 0 { result.errors += 1 }
@@ -164,14 +164,14 @@ enum DashboardParser {
     }
 
     static func qb(_ payload: [String: Any], kind: ServiceKind, now: Date = Date()) throws -> DashboardSnapshot {
-        guard kind == .qb1 || kind == .qb2, payload["full_update"] as? Bool == true,
+        guard kind.isQB, payload["full_update"] as? Bool == true,
               let rows = payload["torrents"] as? [String: [String: Any]],
               let state = payload["server_state"] as? [String: Any],
               let down = number(state["dl_info_speed"]), let up = number(state["up_info_speed"]) else {
             throw AppError.message("qB 完整状态未返回，未将缺失数据计为零。")
         }
         guard rows.keys.allSatisfy({ EndpointPolicy.validTaskID($0, kind: kind) }) else {
-            throw AppError.message("qB 任务清单不完整，未更新仪表盘统计。")
+            throw AppError.message("qB 任务清单不完整，未更新状态表统计。")
         }
         var result = DashboardSnapshot(kind: kind, downloadRate: down, uploadRate: up,
                                        counts: try qbCounts(Array(rows.values)),
@@ -190,13 +190,13 @@ enum DashboardParser {
         return result
     }
 
-    static func tr(stats: [String: Any], rows: [[String: Any]], now: Date = Date()) throws -> DashboardSnapshot {
-        guard let down = number(stats["downloadSpeed"]), let up = number(stats["uploadSpeed"]),
+    static func tr(stats: [String: Any], rows: [[String: Any]], kind: ServiceKind = .tr, now: Date = Date()) throws -> DashboardSnapshot {
+        guard kind.isTR, let down = number(stats["downloadSpeed"]), let up = number(stats["uploadSpeed"]),
               let total = number(stats["torrentCount"]), total.rounded(.towardZero) == total else {
-            throw AppError.message("TR 流量或任务总数不完整，未更新仪表盘统计。")
+            throw AppError.message("TR 流量或任务总数不完整，未更新状态表统计。")
         }
         let cumulative = stats["cumulative-stats"] as? [String: Any] ?? [:]
-        var result = DashboardSnapshot(kind: .tr, downloadRate: down, uploadRate: up,
+        var result = DashboardSnapshot(kind: kind, downloadRate: down, uploadRate: up,
                                        counts: try trCounts(rows),
                                        cumulativeDownloaded: number(cumulative["downloadedBytes"]),
                                        cumulativeUploaded: number(cumulative["uploadedBytes"]),

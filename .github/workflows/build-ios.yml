@@ -2,12 +2,22 @@ name: Build iOS app
 
 on:
   workflow_dispatch:
+    inputs:
+      test_scope:
+        description: Test scope; focused UI diagnostics do not build an IPA
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - connection-lifecycle
+          - tab-performance
 
 permissions:
   contents: read
 
 concurrency:
-  group: devilking-ios-${{ github.ref }}
+  group: devilking-ios-${{ github.ref }}-${{ inputs.test_scope || 'all' }}
   cancel-in-progress: false
 
 jobs:
@@ -33,8 +43,11 @@ jobs:
           fi
           xcodegen --version
       - name: Compile and run API and native UI tests
+        env:
+          IOS_TEST_SCOPE: ${{ inputs.test_scope || 'all' }}
         run: bash scripts/build-ios.sh test
       - name: Archive unsigned device IPA
+        if: ${{ success() && (inputs.test_scope == 'all' || inputs.test_scope == '') }}
         run: bash scripts/build-ios.sh archive
       - name: Export native screen previews
         if: always()
@@ -51,7 +64,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Save IPA and verification receipt
-        if: success()
+        if: ${{ success() && (inputs.test_scope == 'all' || inputs.test_scope == '') }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: DevilkingMP-iOS16.1-unsigned

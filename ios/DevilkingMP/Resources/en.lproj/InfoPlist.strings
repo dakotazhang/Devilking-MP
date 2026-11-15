@@ -1,0 +1,3 @@
+"CFBundleDisplayName" = "Pocket Rem";
+"NSFaceIDUsageDescription" = "Unlock Pocket Rem and your saved server connections.";
+"NSLocalNetworkUsageDescription" = "Connect directly to the MoviePilot, Emby, qBittorrent and Transmission servers you configure.";

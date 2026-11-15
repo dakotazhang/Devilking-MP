@@ -28,15 +28,8 @@ extension AppFontSize {
 }
 
 extension ServiceKind {
-    var compactTitle: String {
-        switch self {
-        case .qb1: return "家庭 qB1"
-        case .qb2: return "家庭 qB2"
-        case .tr: return "长期保种 TR"
-        case .moviepilot: return "MoviePilot"
-        case .emby: return "Emby"
-        }
-    }
+    /// Protocol fallback only. Saved connections use their user-defined name.
+    var compactTitle: String { title }
 }
 
 struct DKCard<Content: View>: View {
@@ -241,7 +234,7 @@ struct DKProtectionNotice: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("迁移保护已开启").font(.subheadline.weight(.semibold))
                 if !compact {
-                    Text("家庭 qB1 和 TR 仅查看。校验与交接期间，启动、停止和限速调整均保持锁定。")
+                    Text("受保护的下载器仅查看。校验与交接期间，启动、停止和限速调整均保持锁定。")
                         .font(.caption).foregroundStyle(DKTheme.muted)
                 }
             }

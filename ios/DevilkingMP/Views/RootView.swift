@@ -17,7 +17,7 @@ struct RootView: View {
                     selectedTab = 1
                 })
                     .environment(\.dkPageCharacter, .rem)
-                    .tabItem { Label("仪表盘", systemImage: "chart.bar.fill") }.tag(0)
+                    .tabItem { Label("状态表", systemImage: "chart.bar.fill") }.tag(0)
                 DownloadersView(selectedKind: $selectedDownloader, filter: $downloaderFilter)
                     .environment(\.dkPageCharacter, .emilia)
                     .tabItem { Label("下载器", systemImage: "arrow.up.arrow.down") }.tag(1)
@@ -51,7 +51,7 @@ struct RootView: View {
             DKTheme.background.ignoresSafeArea()
             VStack(spacing: 20) {
                 Image(systemName: "lock.shield").font(.system(size: 54, weight: .light)).foregroundStyle(DKTheme.accent)
-                Text("家庭服务已锁定").font(.title2.weight(.bold))
+                Text("服务连接已锁定").font(.title2.weight(.bold))
                 Text("验证身份后继续查看与管理。")
                     .font(.subheadline).foregroundStyle(DKTheme.muted)
                 Button { Task { await model.unlock() } } label: {

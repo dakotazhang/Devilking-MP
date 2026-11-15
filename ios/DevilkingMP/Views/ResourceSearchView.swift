@@ -292,7 +292,7 @@ private struct MPResourceDownloadView: View {
                             ForEach(downloaders) { value in Text(value.name).tag(value.id) }
                         }.accessibilityIdentifier("resources.downloader")
                         if downloader != nil {
-                            Text(boundKind.map { "对应应用连接：" + $0.compactTitle } ?? "未绑定：请先在设置确认下载器身份。")
+                            Text(boundKind.map { preferences.text("对应应用连接：") + model.profile($0).displayName } ?? "未绑定：请先在设置确认下载器身份。")
                                 .font(.caption).foregroundStyle(boundKind == nil ? DKTheme.amber : DKTheme.muted)
                                 .accessibilityIdentifier("resources.binding")
                         }
@@ -371,7 +371,7 @@ private struct MPResourceDownloadView: View {
                 Button("取消", role: .cancel) {}
                 Button("确认下载") { Task { await submit() } }
             } message: {
-                Text("\(item.title)\n站点：\(item.siteName)\n下载器：\(downloader?.name ?? "未选择")\n应用连接：\(boundKind?.compactTitle ?? "未绑定")\n目录：\(directoryTitle)\n将实际新增一个下载任务，并可能产生站点下载量。")
+                Text("\(item.title)\n站点：\(item.siteName)\n下载器：\(downloader?.name ?? "未选择")\n应用连接：\(boundKind.map { model.profile($0).displayName } ?? preferences.text("未绑定"))\n目录：\(directoryTitle)\n将实际新增一个下载任务，并可能产生站点下载量。")
             }
             .dkScreen()
         }

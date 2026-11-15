@@ -6,6 +6,12 @@ import UIKit
 /// addresses, downloads or API clients are used. This file is absent in Release.
 @MainActor enum UITestFixtures {
     private static var posterImages: [String: UIImage] = [:]
+    static let largeLibraryEnabled = ProcessInfo.processInfo.arguments.contains("--ui-fixture-large-library")
+    private static var largeTaskCache: [ServiceID: [TorrentTask]] = [:]
+    static let fleetQB=ServiceID(rawValue:"qb:11111111-1111-4111-8111-111111111111")!
+    static let fleetTR=ServiceID(rawValue:"tr:22222222-2222-4222-8222-222222222222")!
+    static let homeGroup="33333333-3333-4333-8333-333333333333"
+    static let fleetGroup="44444444-4444-4444-8444-444444444444"
 
     /// Small, local, visibly synthetic posters exercise foreground image
     /// layering without contacting a tracker, metadata provider or MP server.
@@ -43,13 +49,17 @@ import UIKit
         model.profiles = [ServiceKind.qb1, .qb2, .tr, .moviepilot].map {
             ServiceProfile(kind: $0, baseURL: "https://fixture.invalid/" + $0.rawValue, username: "", allowActions: false)
         }
+        model.profiles += [ServiceProfile(kind:fleetQB,baseURL:"https://fixture.invalid/fleet-qb",username:"",name:"合成刷流 qB"),ServiceProfile(kind:fleetTR,baseURL:"https://fixture.invalid/fleet-tr",username:"",name:"合成刷流 TR")]
+        // Selection is local and never changes connection or action permissions.
+        _ = try? model.preferences.saveGroup(name:"家庭",memberIDs:[.qb1,.qb2,.tr])
+        _ = try? model.preferences.saveGroup(name:"刷流",memberIDs:[fleetQB,fleetTR])
         model.readOnlyMode = true
         model.migrationProtection = true
         model.biometricEnabled = false
         model.locked = false
         model.snapshots = snapshots()
         model.dashboardSnapshots = dashboard()
-        model.tasks = [ServiceKind.qb1, .qb2, .tr].flatMap { tasks($0) }
+        model.tasks = model.downloaderProfiles.flatMap { tasks($0.kind) }
         model.subscriptions = subscriptions()
         model.sites = sites()
         model.discoverySections = sections()
@@ -60,17 +70,23 @@ import UIKit
     }
 
     static func snapshots() -> [ServiceKind: ServiceSnapshot] {
-        [
+        var values: [ServiceKind: ServiceSnapshot] = [
             .qb1: ServiceSnapshot(kind: .qb1, online: true, detail: "合成 qB · 上传上限 60.0 Mbps", downloadRate: 12_800_000, uploadRate: 1_200_000, taskCount: 6),
             .qb2: ServiceSnapshot(kind: .qb2, online: true, detail: "合成 qB · 备用", taskCount: 0),
             .tr: ServiceSnapshot(kind: .tr, online: true, detail: "合成长期保种", uploadRate: 400_000, taskCount: 3),
-            .moviepilot: ServiceSnapshot(kind: .moviepilot, online: true, detail: "合成影视资料与订阅", taskCount: 3)
+            .moviepilot: ServiceSnapshot(kind: .moviepilot, online: true, detail: "合成影视资料与订阅", taskCount: 3),
+            fleetQB: ServiceSnapshot(kind:fleetQB,online:true,detail:"合成刷流",taskCount:6),
+            fleetTR: ServiceSnapshot(kind:fleetTR,online:true,detail:"合成刷流",taskCount:3)
         ]
+        if largeLibraryEnabled {
+            for kind in [ServiceID.qb1,.qb2,.tr] { values[kind]?.taskCount=largeTasks(kind).count }
+        }
+        return values
     }
 
     static func dashboard() -> [ServiceKind: DashboardSnapshot] {
         let free = Double(16 * 1_099_511_627_776)
-        return [
+        var values: [ServiceKind: DashboardSnapshot] = [
             .qb1: DashboardSnapshot(kind: .qb1, downloadRate: 12_800_000, uploadRate: 1_200_000,
                                    counts: DashboardTaskCounts(total: 6, downloading: 1, seeding: 1, verifying: 1, stopped: 1, errors: 1, queued: 1),
                                    disk: DashboardDiskReading(label: "默认下载盘", freeBytes: free), cumulativeDownloaded: 1_200_000_000_000, cumulativeUploaded: 2_400_000_000_000, peerConnectivity: "入站已连接"),
@@ -78,12 +94,28 @@ import UIKit
                                    disk: DashboardDiskReading(label: "默认下载盘", freeBytes: free), cumulativeDownloaded: 0, cumulativeUploaded: 0, peerConnectivity: "入站已连接"),
             .tr: DashboardSnapshot(kind: .tr, downloadRate: 0, uploadRate: 400_000,
                                   counts: DashboardTaskCounts(total: 3, seeding: 1, verifying: 1, stopped: 1),
-                                  disk: DashboardDiskReading(label: "默认下载目录", freeBytes: free), cumulativeDownloaded: 0, cumulativeUploaded: 800_000_000_000)
+                                  disk: DashboardDiskReading(label: "默认下载目录", freeBytes: free), cumulativeDownloaded: 0, cumulativeUploaded: 800_000_000_000),
+            fleetQB: DashboardSnapshot(kind:fleetQB,downloadRate:0,uploadRate:2_000_000,counts:DashboardTaskCounts(total:6,downloading:1,seeding:1,verifying:1,stopped:1,errors:1,queued:1),disk:DashboardDiskReading(label:"默认下载盘",freeBytes:2_000_000_000_000)),
+            fleetTR: DashboardSnapshot(kind:fleetTR,downloadRate:0,uploadRate:1_000_000,counts:DashboardTaskCounts(total:3,seeding:1,verifying:1,stopped:1),disk:DashboardDiskReading(label:"默认下载目录",freeBytes:3_000_000_000_000))
         ]
+        if largeLibraryEnabled {
+            for kind in [ServiceID.qb1,.qb2,.tr] {
+                let rows=largeTasks(kind)
+                values[kind]?.counts=DashboardTaskCounts(total:rows.count,
+                    downloading:rows.filter{$0.rawState == "4" || $0.rawState == "downloading"}.count,
+                    seeding:rows.filter{$0.rawState == "6" || $0.rawState == "stalledUP"}.count,
+                    verifying:rows.filter{$0.verification != nil}.count,
+                    stopped:rows.filter{$0.isStopped}.count,
+                    errors:rows.filter{$0.error != nil}.count,
+                    queued:rows.filter{$0.rawState == "queuedDL"}.count)
+            }
+        }
+        return values
     }
 
     static func tasks(_ kind: ServiceKind) -> [TorrentTask] {
-        if kind == .qb1 {
+        if largeLibraryEnabled,[ServiceID.qb1,.qb2,.tr].contains(kind) {return largeTasks(kind)}
+        if kind == .qb1 || kind == fleetQB {
             let states = ["downloading", "stalledUP", "checkingUP", "stoppedUP", "missingFiles", "queuedDL"]
             let names = ["合成纪录片 · 正在下载", "合成电影 · 长期做种", "合成剧集 · 分片校验", "合成动画 · 已停止", "合成任务 · 文件异常", "合成电影 · 下载排队"]
             return states.enumerated().map { index, state in
@@ -91,18 +123,46 @@ import UIKit
                                "progress": index == 0 ? 0.42 : (index == 2 ? 0.63 : 1.0), "total_size": 24_000_000_000,
                                "dlspeed": index == 0 ? 12_800_000 : 0, "upspeed": index == 1 ? 1_200_000 : 0,
                                "category": "合成站点", "tags": "keep,片库保种", "ratio": 2.0, "num_seeds": 18, "num_leechs": 2,
-                               "save_path": "/synthetic/media"], kind: .qb1)
+                               "save_path": "/synthetic/media"], kind:kind)
             }
         }
-        if kind == .tr {
+        if kind.isTR {
             return [6, 2, 0].enumerated().map { index, state in
                 TaskParser.tr(["hashString": String(repeating: String(index + 7), count: 40), "name": ["合成冷种 · 做种", "合成冷种 · 校验", "合成冷种 · 已停止"][index],
                                "status": state, "percentDone": 1.0, "leftUntilDone": 0, "totalSize": 32_000_000_000,
                                "rateDownload": 0, "rateUpload": index == 0 ? 400_000 : 0, "uploadRatio": 3.0,
-                               "error": 0, "downloadDir": "/synthetic/media", "labels": ["keep"], "recheckProgress": 0.38])
+                               "error": 0, "downloadDir": "/synthetic/media", "labels": ["keep"], "recheckProgress": 0.38],kind:kind)
             }
         }
         return []
+    }
+
+    /// Deliberately large, stable, offline-only UI workload. The ordinary fixture
+    /// remains unchanged unless its explicit launch argument is present.
+    static func largeTasks(_ kind: ServiceID) -> [TorrentTask] {
+        if let cached=largeTaskCache[kind] {return cached}
+        let count=kind == .qb1 ? 1200:(kind == .qb2 ? 300:(kind == .tr ? 3500:0))
+        let rows=(0..<count).map { index -> TorrentTask in
+            let suffix=String(format:"%05d",index)
+            let id="large-"+kind.rawValue+"-"+suffix
+            let name="批量合成 "+kind.rawValue+" · "+suffix
+            if kind.isTR {
+                let state=[6,4,2,0,6,1][index % 6]
+                return TaskParser.tr(["hashString":id,"name":name,"status":state,
+                    "percentDone":state == 4 ? 0.42:1.0,"leftUntilDone":state == 4 ? 18_560_000_000:0,
+                    "totalSize":32_000_000_000,"rateDownload":state == 4 ? 1_000_000:0,
+                    "rateUpload":state == 6 ? 1000:0,"uploadRatio":3.0,"error":0,
+                    "downloadDir":"/synthetic/media","labels":["keep","批量合成"],"recheckProgress":0.38],kind:kind)
+            }
+            let state=["stalledUP","downloading","checkingUP","stoppedUP","missingFiles","queuedDL"][index % 6]
+            return TaskParser.qb(["hash":id,"name":name,"state":state,
+                "progress":state == "downloading" ? 0.42:1.0,"total_size":24_000_000_000,
+                "dlspeed":state == "downloading" ? 1_000_000:0,"upspeed":state == "stalledUP" ? 1000:0,
+                "category":"合成站点","tags":"keep,批量合成","ratio":2.0,
+                "num_seeds":18,"num_leechs":2,"save_path":"/synthetic/media"],kind:kind)
+        }
+        largeTaskCache[kind]=rows
+        return rows
     }
 
     static func sections() -> [MPDiscoverySection] {

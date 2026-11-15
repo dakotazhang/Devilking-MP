@@ -14,7 +14,7 @@ extension DashboardTaskFilter {
     func includes(_ task: TorrentTask) -> Bool {
         if self == .all { return true }
         if self == .errors { return !(task.error ?? "").isEmpty }
-        if task.kind == .tr {
+        if task.kind.protocolKind == .transmission {
             switch self {
             case .downloading: return task.rawState == "4"
             case .seeding: return task.rawState == "6"
@@ -38,6 +38,29 @@ private struct SelectedDownloaderTask: Identifiable {
     var id: String { task.qualifiedID }
 }
 
+/// Build the displayed list once per task/scope/search change, rather than
+/// resolving the configured server list separately for every torrent and row.
+private struct DownloaderTaskProjection {
+    var currentCount = 0
+    var kindsWithTasks = Set<ServiceKind>()
+    var filteredTasks: [TorrentTask] = []
+
+    init() {}
+
+    init(tasks: [TorrentTask], activeKinds: Set<ServiceKind>, filter: DashboardTaskFilter, query: String) {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        for task in tasks where activeKinds.contains(task.kind) {
+            currentCount += 1
+            kindsWithTasks.insert(task.kind)
+            if filter.includes(task) && (text.isEmpty || task.name.localizedCaseInsensitiveContains(text)
+                || task.category.localizedCaseInsensitiveContains(text)
+                || task.tags.contains(where: { $0.localizedCaseInsensitiveContains(text) })) {
+                filteredTasks.append(task)
+            }
+        }
+    }
+}
+
 struct DownloadersView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var preferences: AppPreferences
@@ -48,82 +71,81 @@ struct DownloadersView: View {
     @State private var query = ""
     @State private var selectedTask: SelectedDownloaderTask?
     @State private var limitKind: ServiceKind?
-    @State private var refreshRequests = 0
+    @State private var refreshJob: Task<Void, Never>?
+    @State private var refreshCycle: UUID?
+    @State private var refreshScope: String?
     @State private var lastRead: [ServiceKind: Date] = [:]
     @State private var readErrors: [ServiceKind: String] = [:]
     @State private var displayNow = Date()
     @State private var isVisible=false
-    private let kinds: [ServiceKind] = [.qb1, .qb2, .tr]
-    private var refreshing: Bool { refreshRequests > 0 }
+    @State private var projection = DownloaderTaskProjection()
+    private var kinds: [ServiceKind] { model.visibleDownloaderProfiles.map(\.kind) }
+    private var refreshing: Bool { refreshCycle != nil }
 
     private var activeKinds: [ServiceKind] {
         kinds.filter { (selectedKind == nil || $0 == selectedKind) && model.isConfigured($0) }
     }
-    private var currentTasks: [TorrentTask] { model.tasks.filter { activeKinds.contains($0.kind) } }
-    private var filteredTasks: [TorrentTask] {
-        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return currentTasks.filter {
-            filter.includes($0) && (text.isEmpty || $0.name.localizedCaseInsensitiveContains(text)
-                || $0.category.localizedCaseInsensitiveContains(text)
-                || $0.tags.contains(where: { $0.localizedCaseInsensitiveContains(text) }))
-        }
-    }
-
     var body: some View {
+        let scopeKinds = activeKinds
+        let currentKinds = Set(scopeKinds.filter { taskDataIsCurrent($0) })
+        let names = Dictionary(uniqueKeysWithValues: scopeKinds.map { ($0, model.profile($0).displayName) })
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     DKCharacterHeader()
                     controls
+                    DKGroupScopePicker(context: "downloaders")
                     downloaderPicker
                     if model.readOnlyMode { readOnlyNotice }
-                    if model.migrationProtection && selectedKind != .qb2 { DKProtectionNotice(compact: true) }
-                    if activeKinds.isEmpty {
+                    if model.migrationProtection && scopeKinds.contains(where: { model.profile($0).migrationProtected }) { DKProtectionNotice(compact: true) }
+                    if scopeKinds.isEmpty {
                         DKCard {
                             DKEmptyState(symbol: "link.badge.plus", title: "还未连接下载器", detail: "先在设置中添加所需连接。每个下载器独立保存账号、权限和状态。")
                         }
                     } else {
                         summary
                         filters
-                        ForEach(activeKinds) { kind in
+                        ForEach(scopeKinds) { kind in
                             if let error = readErrors[kind] {
                                 DKCard {
-                                    Label("\(kind.compactTitle) · 列表未更新", systemImage: "exclamationmark.triangle")
+                                    Label("\(model.profile(kind).displayName) · 列表未更新", systemImage: "exclamationmark.triangle")
                                         .font(.subheadline).foregroundStyle(DKTheme.amber)
                                     Text(error).font(.caption).foregroundStyle(DKTheme.muted)
                                     Text("保留上次列表；下面的旧数据不代表当前状态。").font(.caption).foregroundStyle(DKTheme.muted)
                                 }
-                            } else if !taskDataIsCurrent(kind), currentTasks.contains(where: { $0.kind == kind }) {
+                            } else if !currentKinds.contains(kind), projection.kindsWithTasks.contains(kind) {
                                 DKCard {
-                                    Label("\(kind.compactTitle) · 上次列表", systemImage: "clock.badge.exclamationmark")
+                                    Label("\(model.profile(kind).displayName) · 上次列表", systemImage: "clock.badge.exclamationmark")
                                         .font(.subheadline).foregroundStyle(DKTheme.amber)
                                     Text("任务列表已过期或尚未在本页重新读取。旧速度不计为当前流量，请刷新核对。")
                                         .font(.caption).foregroundStyle(DKTheme.muted)
                                 }
                             }
                         }
-                        if filteredTasks.isEmpty {
+                        if projection.filteredTasks.isEmpty {
                             DKCard {
-                                DKEmptyState(symbol: "tray", title: currentTasks.isEmpty ? "尚无已载入任务" : "没有匹配的任务",
-                                             detail: currentTasks.isEmpty ? "刷新读取真实任务。读取失败不代表下载器为空。" : "换个关键词或筛选条件试试。排队任务可在“全部”查看。")
+                                DKEmptyState(symbol: "tray", title: projection.currentCount == 0 ? "尚无已载入任务" : "没有匹配的任务",
+                                             detail: projection.currentCount == 0 ? "刷新读取真实任务。读取失败不代表下载器为空。" : "换个关键词或筛选条件试试。排队任务可在“全部”查看。")
                             }
                         } else {
-                            Text("已载入 \(currentTasks.count) 个 · 显示 \(filteredTasks.count) 个\(selectedKind == nil ? " · 跨下载器分别计数" : "")")
+                            Text("已载入 \(projection.currentCount) 个 · 显示 \(projection.filteredTasks.count) 个\(selectedKind == nil ? " · 跨下载器分别计数" : "")")
                                 .font(.caption).foregroundStyle(DKTheme.muted).padding(.horizontal, 3)
-                            ForEach(filteredTasks, id: \.qualifiedID) { task in
+                                .accessibilityIdentifier("downloaders.taskCount")
+                                .accessibilityValue("\(projection.currentCount)/\(projection.filteredTasks.count)")
+                            ForEach(projection.filteredTasks, id: \.qualifiedID) { task in
                                 Button { selectedTask = SelectedDownloaderTask(task: task) } label: {
                                     VStack(alignment: .leading, spacing: 5) {
                                         if selectedKind == nil {
-                                            Text(task.kind.compactTitle).font(.caption.weight(.semibold)).foregroundStyle(DKTheme.accent).padding(.leading, 8)
+                                            Text(verbatim: names[task.kind] ?? task.kind.title).font(.caption.weight(.semibold)).foregroundStyle(DKTheme.accent).padding(.leading, 8)
                                         }
-                                        TorrentTaskRow(task: task, isCurrent: taskDataIsCurrent(task.kind))
+                                        TorrentTaskRow(task: task, isCurrent: currentKinds.contains(task.kind))
                                     }
                                 }.buttonStyle(.plain).accessibilityIdentifier("downloaders.task.\(task.qualifiedID)")
                             }
                         }
                         VStack(alignment: .leading, spacing: 10) {
-                            ForEach(activeKinds) { kind in
-                                DKServiceLink(kind: kind, title: "打开 \(kind.compactTitle) 原页面").frame(minHeight: 44)
+                            ForEach(scopeKinds) { kind in
+                                DKServiceLink(kind: kind, title: "打开 \(model.profile(kind).displayName) 原页面").frame(minHeight: 44)
                             }
                         }.padding(.top, 8)
                     }
@@ -143,10 +165,21 @@ struct DownloadersView: View {
                     await reload()
                 }
             }
-            .onAppear { isVisible=true }
-            .onDisappear { isVisible=false }
-            .task {
-                while !Task.isCancelled {
+            .onAppear { isVisible=true; rebuildProjection(model.tasks); displayNow=Date() }
+            .onReceive(model.$tasks) { tasks in rebuildProjection(tasks) }
+            .onChange(of: query) { _ in rebuildProjection(model.tasks) }
+            .onChange(of: filter) { _ in rebuildProjection(model.tasks) }
+            .onChange(of: taskScopeID) { _ in rebuildProjection(model.tasks) }
+            .onChange(of: preferences.selectedGroupID) { _ in selectedKind = nil }
+            .onChange(of: model.visibleDownloaderProfiles.map(\.kind)) { ids in
+                if let selectedKind, !ids.contains(selectedKind) { self.selectedKind = nil }
+            }
+            .onDisappear { isVisible=false; refreshJob?.cancel() }
+            .onChange(of: scenePhase) { phase in if phase != .active { refreshJob?.cancel() } }
+            .onChange(of: model.locked) { locked in if locked { refreshJob?.cancel() } }
+            .task(id: freshnessScheduleID) {
+                guard isVisible, scenePhase == .active, !model.locked else { return }
+                while !Task.isCancelled && isVisible && scenePhase == .active && !model.locked {
                     do { try await Task.sleep(nanoseconds: 15_000_000_000) } catch { return }
                     displayNow = Date()
                 }
@@ -185,20 +218,20 @@ struct DownloadersView: View {
         Button { limitKind = kind } label: {
             Label("上传上限", systemImage: "speedometer").frame(minHeight: 44).padding(.horizontal, 8)
         }.buttonStyle(.bordered).disabled(!model.canManage(kind) || model.busy || refreshing)
-            .accessibilityLabel("设置\(kind.compactTitle)上传上限")
+            .accessibilityLabel("设置\(model.profile(kind).displayName)上传上限")
             .accessibilityIdentifier("downloaders.uploadLimit")
     }
     private var downloaderPicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                downloaderChoice(nil, title: "全部下载器")
-                ForEach(kinds) { kind in downloaderChoice(kind, title: kind.compactTitle) }
+                downloaderChoice(nil, title: preferences.text("全部下载器"))
+                ForEach(kinds) { kind in downloaderChoice(kind, title: model.profile(kind).displayName) }
             }
         }
     }
     private func downloaderChoice(_ kind: ServiceKind?, title: String) -> some View {
         Button { selectedKind = kind } label: {
-            Text(LocalizedStringKey(title)).font(.subheadline.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 44)
+            Text(verbatim: title).font(.subheadline.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 44)
                 .foregroundStyle(selectedKind == kind ? DKTheme.background : DKTheme.muted)
                 .background(selectedKind == kind ? DKTheme.accent : DKTheme.card, in: Capsule())
         }.buttonStyle(.plain).accessibilityIdentifier("downloaders.service.\(kind?.rawValue ?? "all")")
@@ -214,7 +247,7 @@ struct DownloadersView: View {
     private var summary: some View {
         let aggregate = DashboardAggregate(configured: activeKinds, snapshots: model.dashboardSnapshots, now: displayNow)
         return DKCard {
-            Text(selectedKind?.compactTitle ?? "全部家庭下载器").font(.headline)
+            Text(verbatim: selectedKind.map { model.profile($0).displayName } ?? preferences.text("当前分组下载器")).font(.headline)
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), alignment: .leading, spacing: 12) {
                 DKMetric(title: "当前下载", value: aggregate.downloadRate.map(Format.rate) ?? "—", symbol: "arrow.down")
                 DKMetric(title: "当前上传", value: aggregate.uploadRate.map(Format.rate) ?? "—", symbol: "arrow.up", color: DKTheme.green)
@@ -223,7 +256,7 @@ struct DownloadersView: View {
                 .font(.caption).foregroundStyle(aggregate.hasPartialCoverage ? DKTheme.amber : DKTheme.muted)
             ForEach(activeKinds) { kind in
                 if let date = lastRead[kind] {
-                    Text("\(kind.compactTitle) 列表读取于 \(date.formatted(date: .omitted, time: .standard))")
+                    Text("\(model.profile(kind).displayName) 列表读取于 \(date.formatted(date: .omitted, time: .standard))")
                         .font(.caption2).foregroundStyle(DKTheme.muted)
                 }
             }
@@ -243,12 +276,36 @@ struct DownloadersView: View {
             }
         }
     }
+    /// A new scope waits for the old bounded read to finish, then reads its own
+    /// servers even when auto-refresh is disabled. Same-scope callers coalesce.
     private func reload() async {
-        guard !refreshing && !model.locked && !Task.isCancelled else { return }
+        guard !model.locked, !Task.isCancelled, !activeKinds.isEmpty else { return }
+        let requestedScope = taskScopeID
+        while let job = refreshJob {
+            let runningScope = refreshScope
+            await job.value
+            guard !Task.isCancelled, !model.locked, requestedScope == taskScopeID else { return }
+            if runningScope == requestedScope && !job.isCancelled { return }
+        }
+        guard !Task.isCancelled, !model.locked, requestedScope == taskScopeID else { return }
         let requestedKinds = activeKinds
         guard !requestedKinds.isEmpty else { return }
-        refreshRequests += 1
-        defer { refreshRequests -= 1 }
+        let cycle = UUID()
+        refreshCycle = cycle
+        refreshScope = requestedScope
+        let job = Task { await performReload(requestedKinds, cycle: cycle) }
+        refreshJob = job
+        await job.value
+    }
+
+    private func performReload(_ requestedKinds: [ServiceKind], cycle: UUID) async {
+        defer {
+            // An old cancelled round must never clear a newer round's spinner.
+            if refreshCycle == cycle {
+                refreshCycle = nil; refreshScope = nil; refreshJob = nil
+            }
+        }
+        guard !Task.isCancelled, !model.locked else { return }
         async let dashboard:Void=model.refreshDashboard(manual:false)
         let sharedModel=model
         await withTaskGroup(of:(ServiceKind,Bool).self) { group in
@@ -266,7 +323,18 @@ struct DownloadersView: View {
         await dashboard
     }
 
-    private var refreshScheduleID:String { "\(selectedKind?.rawValue ?? "all")-\(preferences.refreshInterval)-\(scenePhase == .active)-\(model.locked)-\(isVisible)" }
+    private var taskScopeID: String {
+        "\(preferences.selectedGroupID ?? "all-groups")-\(activeKinds.map(\.rawValue).joined(separator: ","))-\(selectedKind?.rawValue ?? "all")"
+    }
+    private var refreshScheduleID:String { "\(taskScopeID)-\(preferences.refreshInterval)-\(scenePhase == .active)-\(model.locked)-\(isVisible)" }
+    private var freshnessScheduleID: String { "\(isVisible)-\(scenePhase == .active)-\(model.locked)" }
+
+    private func rebuildProjection(_ tasks: [TorrentTask]) {
+        // Hidden tabs retain their current list/scroll state, but do no list
+        // filtering when another page publishes unrelated model updates.
+        guard isVisible else { return }
+        projection = DownloaderTaskProjection(tasks: tasks, activeKinds: Set(activeKinds), filter: filter, query: query)
+    }
 
     private func taskDataIsCurrent(_ kind: ServiceKind) -> Bool {
         guard readErrors[kind] == nil, let read = lastRead[kind] else { return false }
@@ -333,7 +401,7 @@ private struct TaskDetailView: View {
                     }
                     DKCard {
                         DKSectionTitle(title: "归属与文件")
-                        DKInfoRow(title: "下载器", value: task.kind.compactTitle)
+                        DKInfoRow(title: "下载器", value: model.profile(task.kind).displayName)
                         DKInfoRow(title: "分类", value: task.category)
                         DKInfoRow(title: "标签", value: task.tags.joined(separator: "、"))
                         VStack(alignment: .leading, spacing: 8) {
@@ -344,7 +412,7 @@ private struct TaskDetailView: View {
                     if let error = task.error, !error.isEmpty {
                         DKCard { Label(error, systemImage: "exclamationmark.triangle").font(.subheadline).foregroundStyle(DKTheme.amber).textSelection(.enabled) }
                     }
-                    if model.migrationProtection && task.kind != .qb2 { DKProtectionNotice() }
+                    if model.migrationProtection && model.profile(task.kind).migrationProtected { DKProtectionNotice() }
                     DKCard {
                         Button { showingConfirmation = true } label: {
                             Label(task.isStopped ? "启动此任务" : "停止此任务", systemImage: task.isStopped ? "play.fill" : "pause.fill")
@@ -364,7 +432,7 @@ private struct TaskDetailView: View {
                     let start = task.isStopped
                     Task { await model.performTask(task, start: start) }
                 }
-            } message: { Text("\(task.kind.compactTitle)\n\(task.name)\n操作前会重新核对任务；失败不会自动重试。") }
+            } message: { Text("\(model.profile(task.kind).displayName)\n\(task.name)\n操作前会重新核对任务；失败不会自动重试。") }
             .dkScreen()
         }.tint(DKTheme.accent)
     }
@@ -382,7 +450,7 @@ private struct UploadLimitView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("\(kind.compactTitle) · 全局上传上限") {
+                Section("\(model.profile(kind).displayName) · 全局上传上限") {
                     HStack {
                         TextField("请输入带宽", text: $input).keyboardType(.decimalPad)
                         Text("Mbps").foregroundStyle(DKTheme.muted)
@@ -408,7 +476,7 @@ private struct UploadLimitView: View {
                     guard let value, valid else { return }
                     Task { await model.setUploadLimit(kind, mbps: value); dismiss() }
                 }
-            } message: { Text("\(kind.compactTitle)：\(input) Mbps。此次写入失败后不会自动重试。") }
+            } message: { Text("\(model.profile(kind).displayName)：\(input) Mbps。此次写入失败后不会自动重试。") }
         }.tint(DKTheme.accent)
     }
 }
