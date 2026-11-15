@@ -334,7 +334,7 @@
 "用户名" = "Username";
 "电影" = "Movies";
 "电视剧" = "TV shows";
-"界面支持简体中文、繁體中文与 English；影片名称、站点与服务返回的内容保留原文。" = "The interface supports Simplified Chinese, Traditional Chinese and English. Media titles, site names and server content keep their original text.";
+"界面支持简体中文与美式英语；影片名称、站点与服务返回的内容保留原文。" = "The interface supports Simplified Chinese and US English. Media titles, site names and server content keep their original text.";
 "监听未连接" = "Listening port not connected";
 "知道了" = "OK";
 "确认" = "Confirm";
@@ -364,7 +364,6 @@
 "等待读取磁盘余量" = "Waiting for free disk space";
 "简体中文" = "Simplified Chinese";
 "管理入口" = "Management links";
-"繁體中文" = "Traditional Chinese";
 "缓存更新：" = "Cache updated:";
 "自己挑选具体资源" = "Choose a specific resource";
 "获取元数据" = "Fetching metadata";

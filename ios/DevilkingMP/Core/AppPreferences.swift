@@ -12,13 +12,12 @@ enum AppTheme: String, CaseIterable, Identifiable {
 
 enum AppLanguage: String, CaseIterable, Identifiable {
     case simplifiedChinese = "zh-Hans"
-    case traditionalChinese = "zh-Hant"
     case english = "en"
     var id: String { rawValue }
     var title: String {
-        switch self { case .simplifiedChinese: return "简体中文"; case .traditionalChinese: return "繁體中文"; case .english: return "English" }
+        switch self { case .simplifiedChinese: return "简体中文"; case .english: return "English (US)" }
     }
-    var locale: Locale { Locale(identifier: rawValue) }
+    var locale: Locale { Locale(identifier: self == .english ? "en_US" : rawValue) }
 
     /// Resolve interface keys explicitly so user-selected language also applies
     /// to reusable components receiving String values rather than literals.
@@ -78,6 +77,11 @@ enum DashboardModule: String, CaseIterable, Identifiable {
         } else { visibleDashboardModules = Set(DashboardModule.allCases) }
         downloadDirectoriesByConnection = defaults.dictionary(forKey: "ui.downloadDirectoriesByConnection") as? [String: String] ?? [:]
         boundDownloadersByConnection = defaults.dictionary(forKey: "ui.boundDownloadersByConnection") as? [String: [String: String]] ?? [:]
+        // Retired language selections fall back to Chinese without resetting
+        // refresh, appearance, connection or safety preferences.
+        if AppLanguage(rawValue: defaults.string(forKey: "ui.language") ?? "") == nil {
+            defaults.set(language.rawValue, forKey: "ui.language")
+        }
     }
 
     func isVisible(_ module: DashboardModule) -> Bool { visibleDashboardModules.contains(module) }

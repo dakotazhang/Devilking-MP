@@ -154,7 +154,7 @@ The device preference offers off, 15, 30, 60 or 120 seconds, defaulting to 60 se
 
 Routine dashboard, task-list and discovery reads have a 22-second operation budget including authentication and auxiliary requests. Explicit site searches use a separate 150-second budget because they contact selected sites. Cancellation or timeout releases the current operation without reporting missing data as zero and without automatically replaying business work. Discovery supports pull-to-refresh even when its content is empty or shorter than the screen.
 
-Theme, text size, dashboard module visibility and Simplified Chinese / Traditional Chinese / English interface choices are device-local. Server-supplied media titles and site content keep their original text. Presentation preferences never change server configuration, action permissions or migration protection.
+Theme, text size, dashboard module visibility and Simplified Chinese / US English interface choices are device-local. English uses the `en_US` locale. Server-supplied media titles and site content keep their original text. Presentation preferences never change server configuration, action permissions or migration protection.
 
 ## Health and version discovery
 

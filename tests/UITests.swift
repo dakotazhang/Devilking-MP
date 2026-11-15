@@ -164,10 +164,12 @@ final class UITests: XCTestCase {
         let refresh = app.buttons["settings.refreshInterval"]
         reveal(refresh, in: app)
         XCTAssertTrue(refresh.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["数据刷新频率"].isHittable, "Refresh interval must have a visible row label, not only the selected value")
         refresh.tap()
         app.buttons.matching(identifier: "关闭自动刷新").firstMatch.tap()
         let theme = app.buttons["settings.theme"]
         reveal(theme, in: app)
+        XCTAssertTrue(app.staticTexts["外观主题"].isHittable)
         theme.tap()
         app.buttons.matching(identifier: "浅色").firstMatch.tap()
         try attachRenderedScreenshot(app, name: "13-settings-light-appearance")
@@ -194,10 +196,12 @@ final class UITests: XCTestCase {
         app.buttons.matching(identifier: "跟随系统").firstMatch.tap()
         let language = app.buttons["settings.language"]
         reveal(language, in: app)
+        XCTAssertTrue(app.staticTexts["应用语言"].isHittable)
         language.tap()
-        app.buttons.matching(identifier: "English").firstMatch.tap()
+        app.buttons.matching(identifier: "English (US)").firstMatch.tap()
         XCTAssertTrue(app.tabBars.buttons["Settings"].waitForExistence(timeout: 5))
         reveal(language, in: app)
+        XCTAssertTrue(app.staticTexts["App language"].isHittable)
         language.tap()
         app.buttons.matching(identifier: "简体中文").firstMatch.tap()
         XCTAssertTrue(app.tabBars.buttons["设置"].waitForExistence(timeout: 5))

@@ -124,14 +124,20 @@ struct SettingsView: View {
                 Label("MP 下载器对应关系", systemImage: "link").frame(minHeight: 36)
             }
             Divider()
-            Picker(selection: $preferences.refreshInterval) {
-                Text("关闭自动刷新").tag(0)
-                Text("15 秒").tag(15)
-                Text("30 秒").tag(30)
-                Text("60 秒").tag(60)
-                Text("120 秒").tag(120)
-            } label: { Label("数据刷新频率", systemImage: "arrow.clockwise") }
-                .accessibilityIdentifier("settings.refreshInterval")
+            HStack {
+                Label("数据刷新频率", systemImage: "arrow.clockwise")
+                Spacer(minLength: 8)
+                Picker("数据刷新频率", selection: $preferences.refreshInterval) {
+                    Text("关闭自动刷新").tag(0)
+                    Text("15 秒").tag(15)
+                    Text("30 秒").tag(30)
+                    Text("60 秒").tag(60)
+                    Text("120 秒").tag(120)
+                }.pickerStyle(.menu).labelsHidden()
+                    .accessibilityLabel("数据刷新频率")
+                    .accessibilityValue(preferences.text(preferences.refreshInterval == 0 ? "关闭自动刷新" : "\(preferences.refreshInterval) 秒"))
+                    .accessibilityIdentifier("settings.refreshInterval")
+            }.frame(minHeight: 44)
             Text("仅在 App 前台刷新仪表盘与当前下载器列表；关闭后仍可手动刷新。发现页下拉刷新，搜索结果不会被定时刷新覆盖。")
                 .font(.caption).foregroundStyle(DKTheme.muted)
         }
@@ -140,17 +146,35 @@ struct SettingsView: View {
     private var appearance: some View {
         DKCard {
             DKSectionTitle(title: "应用设置")
-            Picker("外观主题", selection: $preferences.theme) {
-                ForEach(AppTheme.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
-            }.accessibilityIdentifier("settings.theme")
-            Picker("应用语言", selection: $preferences.language) {
-                ForEach(AppLanguage.allCases) { Text(verbatim: $0.title).tag($0) }
-            }.accessibilityIdentifier("settings.language")
-            Text("界面支持简体中文、繁體中文与 English；影片名称、站点与服务返回的内容保留原文。")
+            HStack {
+                Label("外观主题", systemImage: "paintpalette")
+                Spacer(minLength: 8)
+                Picker("外观主题", selection: $preferences.theme) {
+                    ForEach(AppTheme.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
+                }.pickerStyle(.menu).labelsHidden()
+                    .accessibilityLabel("外观主题").accessibilityValue(preferences.text(preferences.theme.title))
+                    .accessibilityIdentifier("settings.theme")
+            }.frame(minHeight: 44)
+            HStack {
+                Label("应用语言", systemImage: "globe")
+                Spacer(minLength: 8)
+                Picker("应用语言", selection: $preferences.language) {
+                    ForEach(AppLanguage.allCases) { Text(verbatim: $0.title).tag($0) }
+                }.pickerStyle(.menu).labelsHidden()
+                    .accessibilityLabel("应用语言").accessibilityValue(preferences.language.title)
+                    .accessibilityIdentifier("settings.language")
+            }.frame(minHeight: 44)
+            Text("界面支持简体中文与美式英语；影片名称、站点与服务返回的内容保留原文。")
                 .font(.caption).foregroundStyle(DKTheme.muted)
-            Picker("字体大小", selection: $preferences.fontSize) {
-                ForEach(AppFontSize.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
-            }.accessibilityIdentifier("settings.fontSize")
+            HStack {
+                Label("字体大小", systemImage: "textformat.size")
+                Spacer(minLength: 8)
+                Picker("字体大小", selection: $preferences.fontSize) {
+                    ForEach(AppFontSize.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
+                }.pickerStyle(.menu).labelsHidden()
+                    .accessibilityLabel("字体大小").accessibilityValue(preferences.text(preferences.fontSize.title))
+                    .accessibilityIdentifier("settings.fontSize")
+            }.frame(minHeight: 44)
             Text("放大文字不会缩小系统辅助功能字体。")
                 .font(.caption).foregroundStyle(DKTheme.muted)
         }
@@ -253,16 +277,20 @@ private struct DownloaderBindingsSettingsView: View {
                         if let endpoint = downloader.targetBaseURL {
                             Text(endpoint).font(.caption).foregroundStyle(DKTheme.muted).textSelection(.enabled)
                         }
-                        Picker("对应 App 下载器", selection: Binding<ServiceKind?>(get: {
-                            preferences.boundDownloaderKind(for: downloader.bindingID, baseURL: baseURL)
-                        }, set: {
-                            preferences.setBoundDownloaderKind($0, for: downloader.bindingID, baseURL: baseURL)
-                        })) {
-                            Text("未绑定").tag(ServiceKind?.none)
-                            ForEach(availableKinds(for: downloader)) { kind in
-                                Text(LocalizedStringKey(kind.compactTitle)).tag(Optional(kind))
-                            }
-                        }
+                        HStack {
+                            Label("对应 App 下载器", systemImage: "link")
+                            Spacer(minLength: 8)
+                            Picker("对应 App 下载器", selection: Binding<ServiceKind?>(get: {
+                                preferences.boundDownloaderKind(for: downloader.bindingID, baseURL: baseURL)
+                            }, set: {
+                                preferences.setBoundDownloaderKind($0, for: downloader.bindingID, baseURL: baseURL)
+                            })) {
+                                Text("未绑定").tag(ServiceKind?.none)
+                                ForEach(availableKinds(for: downloader)) { kind in
+                                    Text(LocalizedStringKey(kind.compactTitle)).tag(Optional(kind))
+                                }
+                            }.pickerStyle(.menu).labelsHidden().accessibilityLabel("对应 App 下载器")
+                        }.frame(minHeight: 44)
                         if availableKinds(for: downloader).isEmpty {
                             Text("请先配置与该类型相符的下载器连接。")
                                 .font(.caption).foregroundStyle(DKTheme.amber)

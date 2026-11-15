@@ -21,13 +21,13 @@ final class AppPreferencesTests: XCTestCase {
         let first = AppPreferences(defaults: defaults)
         first.refreshInterval = 0
         first.theme = .light
-        first.language = .traditionalChinese
+        first.language = .english
         first.fontSize = .large
         first.setVisible(.storage, false)
         let second = AppPreferences(defaults: defaults)
         XCTAssertEqual(second.refreshInterval, 0)
         XCTAssertEqual(second.theme, .light)
-        XCTAssertEqual(second.language, .traditionalChinese)
+        XCTAssertEqual(second.language, .english)
         XCTAssertEqual(second.fontSize, .large)
         XCTAssertFalse(second.isVisible(.storage))
         XCTAssertTrue(second.isVisible(.traffic))
@@ -47,6 +47,21 @@ final class AppPreferencesTests: XCTestCase {
         preferences.refreshInterval = -1
         XCTAssertEqual(preferences.refreshInterval, 60)
         XCTAssertEqual(AppPreferences(defaults: defaults).refreshInterval, 60)
+    }
+
+    @MainActor func testRetiredLanguageFallsBackWithoutResettingOtherPreferences() {
+        let defaults = isolatedDefaults()
+        defaults.set("zh-Hant", forKey: "ui.language")
+        defaults.set(30, forKey: "ui.refreshInterval")
+        defaults.set("dark", forKey: "ui.theme")
+        defaults.set(true, forKey: "readOnlyMode")
+        let preferences = AppPreferences(defaults: defaults)
+        XCTAssertEqual(AppLanguage.allCases, [.simplifiedChinese, .english])
+        XCTAssertEqual(preferences.language, .simplifiedChinese)
+        XCTAssertEqual(defaults.string(forKey: "ui.language"), "zh-Hans")
+        XCTAssertEqual(preferences.refreshInterval, 30)
+        XCTAssertEqual(preferences.theme, .dark)
+        XCTAssertTrue(defaults.bool(forKey: "readOnlyMode"))
     }
 
     @MainActor func testDirectoryPreferencesAreConnectionScopedAndRevalidated() {
@@ -104,8 +119,9 @@ final class AppPreferencesTests: XCTestCase {
     func testActualLanguageResourcesLoadFromAppBundle() {
         let bundle = Bundle(for: AppModel.self)
         XCTAssertEqual(AppLanguage.english.localized("设置", bundle: bundle), "Settings")
-        XCTAssertEqual(AppLanguage.traditionalChinese.localized("服务器设置", bundle: bundle), "伺服器設定")
         XCTAssertEqual(AppLanguage.simplifiedChinese.localized("服务器设置", bundle: bundle), "服务器设置")
         XCTAssertEqual(AppLanguage.english.localized("A server-supplied title", bundle: bundle), "A server-supplied title")
+        XCTAssertEqual(AppLanguage.english.locale.identifier, "en_US")
+        XCTAssertEqual(AppLanguage.english.title, "English (US)")
     }
 }
