@@ -144,7 +144,7 @@ struct MPResourceSearchView: View {
                     .buttonStyle(.plain).accessibilityIdentifier("resources.result." + resource.id)
             }
         } else {
-            DKCard { DKEmptyState(symbol: "checklist", title: "先选站点，再搜索", detail: "影视资料用于订阅，PT 资源用于挑选具体种子，两种操作互不替代。") }
+            DKCard { DKEmptyState(symbol: "checklist", title: "先选站点，再搜索", detail: "影视订阅由 MP 自动选种下载；PT 资源由你手选种子。下载完成后均按 MP 现有整理配置与识别结果处理；手选不会自动建立追更订阅。") }
         }
     }
 

@@ -90,7 +90,7 @@ struct MoviePilotView: View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(searching ? "找到想看的下一部" : "好作品，随时追订").font(.title3.weight(.bold))
-                Text(searching ? "选择作品后，按默认规则订阅，或搜索站点资源。" : "发现作品后订阅；想挑选具体种子，可切换“PT资源”。")
+                Text(searching ? "选择作品订阅，由 MP 按规则自动选种下载；也可到“PT资源”手选具体种子。" : "订阅后由 MP 按规则自动选种下载；完成后按现有整理配置处理。")
                     .font(.caption).foregroundStyle(DKTheme.muted)
                 if let updated = model.discoveryUpdatedAt, !searching {
                     Text("更新于 \(updated.formatted(date: .omitted, time: .shortened))")

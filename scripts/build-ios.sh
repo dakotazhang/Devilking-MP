@@ -38,7 +38,7 @@ if [[ "$test_scope" == all && ( "$task_mode" == archive || "$task_mode" == all )
   xcodebuild -project ios/DevilkingMP.xcodeproj -scheme DevilkingMP \
     -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
     -archivePath build/DevilkingMP.xcarchive -derivedDataPath build/DerivedData \
-    IPHONEOS_DEPLOYMENT_TARGET=16.1 CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER:-1}" CODE_SIGNING_ALLOWED=NO \
+    IPHONEOS_DEPLOYMENT_TARGET=16.1 CURRENT_PROJECT_VERSION="$((32 + ${GITHUB_RUN_NUMBER:-1}))" CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" \
     archive 2>&1 | tee build/archive.log
   mkdir -p build/ipa/Payload

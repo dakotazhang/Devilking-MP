@@ -137,7 +137,7 @@
 "单位是兆比特每秒，60 Mbps 约为 7.5 MB/s。仅修改所选下载器，其他下载器不受影响。" = "Units are megabits per second. 60 Mbps is about 7.5 MB/s. Only the selected downloader changes.";
 "发现" = "Discover";
 "发现下一部想看的电影" = "Discover your next movie";
-"发现作品后订阅；想挑选具体种子，可切换“PT资源”。" = "Discover media and subscribe, or switch to PT resources to choose a specific torrent.";
+"订阅后由 MP 按规则自动选种下载；完成后按现有整理配置处理。" = "Subscribe and let MP select and download matching torrents. Completed downloads follow your existing organization settings.";
 "取消" = "Cancel";
 "取消刷新" = "Cancel refresh";
 "取消收藏这部影片？" = "Remove this media from favorites?";
@@ -224,7 +224,7 @@
 "影视" = "Media";
 "影视详情" = "Media details";
 "影视资料列表格式不完整。" = "The media list format is incomplete.";
-"影视资料用于订阅，PT 资源用于挑选具体种子，两种操作互不替代。" = "Use media details for subscriptions and PT resources to choose torrents. These are separate actions.";
+"影视订阅由 MP 自动选种下载；PT 资源由你手选种子。下载完成后均按 MP 现有整理配置与识别结果处理；手选不会自动建立追更订阅。" = "With a media subscription, MP selects and downloads torrents automatically. With PT resources, you choose a torrent. After download, both follow your existing MP organization settings and media recognition results. Choosing a torrent does not create an ongoing subscription.";
 "影视资料缺少名称或媒体身份。" = "The media information has no title or identity.";
 "待刷新" = "Needs refresh";
 "待定" = "Pending";
@@ -247,7 +247,7 @@
 "排队中" = "Queued";
 "接口读取未完成，请检查连接并稍后刷新。" = "The request did not finish. Check the connection and refresh later.";
 "搜索 PT 站点资源" = "Search PT site resources";
-"搜索名称、站点或标签" = "Search names, sites or labels";
+"搜索名称、分类或标签" = "Search names, categories or labels";
 "搜索家庭片库" = "Search home library";
 "搜索已订阅作品" = "Search subscriptions";
 "搜索所选站点" = "Search selected sites";
@@ -483,7 +483,7 @@
 "连接超时，可稍后下拉重新读取。" = "The connection timed out. Pull to reload later.";
 "追订中" = "Following";
 "选择 PT 站点" = "Select PT sites";
-"选择作品后，按默认规则订阅，或搜索站点资源。" = "Select media to subscribe using default rules or search site resources.";
+"选择作品订阅，由 MP 按规则自动选种下载；也可到“PT资源”手选具体种子。" = "Subscribe and let MP select matching torrents, or choose a specific torrent under PT resources.";
 "选择已连接的 PT 站点，查看种子后再决定下载。" = "Choose connected PT sites, review torrents, then decide whether to download.";
 "选择要追订的季" = "Select a season to follow";
 "部分连接配置未读到" = "Some connection settings did not load";
@@ -664,3 +664,6 @@
 "请先连接 %@。" = "Connect %@ first.";
 "网络请求失败（%lld），未自动重试。" = "The network request failed (%lld) and was not retried automatically.";
 "已导入 %lld 个连接，全局只读锁已开启，管理开关保持关闭。请删除“文件”中含密码的导入文件。" = "Imported %lld connections. The global read-only lock is enabled and management switches remain off. Delete the imported file containing passwords from Files.";
+
+"完整标签见详情" = "View full labels in details";
+"先在下载器中设置站点标记：qB 使用任务分类或标签，TR 使用任务标签。刷新后即可显示和搜索；App 不会自动判断站点或修改标签。" = "Set site labels in your downloader first: use task categories or tags in qB, or task labels in TR. Refresh to display and search them. The app does not infer sites or edit labels.";

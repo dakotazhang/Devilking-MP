@@ -122,7 +122,7 @@ import UIKit
                 TaskParser.qb(["hash": String(repeating: String(index + 1), count: 40), "name": names[index], "state": state,
                                "progress": index == 0 ? 0.42 : (index == 2 ? 0.63 : 1.0), "total_size": 24_000_000_000,
                                "dlspeed": index == 0 ? 12_800_000 : 0, "upspeed": index == 1 ? 1_200_000 : 0,
-                               "category": "合成站点", "tags": "keep,片库保种", "ratio": 2.0, "num_seeds": 18, "num_leechs": 2,
+                               "category": "合成站点", "tags": "keep,IYUU,合成标签 qB,片库保种,合成标签 qB", "ratio": 2.0, "num_seeds": 18, "num_leechs": 2,
                                "save_path": "/synthetic/media"], kind:kind)
             }
         }
@@ -131,7 +131,7 @@ import UIKit
                 TaskParser.tr(["hashString": String(repeating: String(index + 7), count: 40), "name": ["合成冷种 · 做种", "合成冷种 · 校验", "合成冷种 · 已停止"][index],
                                "status": state, "percentDone": 1.0, "leftUntilDone": 0, "totalSize": 32_000_000_000,
                                "rateDownload": 0, "rateUpload": index == 0 ? 400_000 : 0, "uploadRatio": 3.0,
-                               "error": 0, "downloadDir": "/synthetic/media", "labels": ["keep"], "recheckProgress": 0.38],kind:kind)
+                               "error": 0, "downloadDir": "/synthetic/media", "labels": ["  keep  ", "IYUU", "合成标签 TR", "长期保种", "合成标签 TR"], "recheckProgress": 0.38],kind:kind)
             }
         }
         return []

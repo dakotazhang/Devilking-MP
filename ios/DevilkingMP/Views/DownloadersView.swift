@@ -38,12 +38,49 @@ private struct SelectedDownloaderTask: Identifiable {
     var id: String { task.qualifiedID }
 }
 
+/// Display-only metadata. It never infers a tracker/site identity or changes
+/// the server's values; the task detail continues to use the complete originals.
+private struct DownloaderTaskMetadata {
+    let category: String?
+    let labels: String?
+
+    init(_ task: TorrentTask) {
+        let category = task.category.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.category = category.isEmpty ? nil : category
+        var ordinary: [String] = []
+        var maintenance: [String] = []
+        var seen = Set<String>()
+        for raw in task.tags {
+            let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = value.lowercased()
+            guard !value.isEmpty, seen.insert(key).inserted else { continue }
+            // Keep common maintenance labels from occupying the first visible
+            // line. Unknown labels retain their original relative order.
+            if key == "keep" || key == "iyuu" { maintenance.append(value) }
+            else { ordinary.append(value) }
+        }
+        let labels = ordinary + maintenance
+        self.labels = labels.isEmpty ? nil : labels.joined(separator: " · ")
+    }
+}
+
+private struct ProjectedDownloaderTask: Identifiable {
+    let task: TorrentTask
+    let metadata: DownloaderTaskMetadata
+    var id: String { task.qualifiedID }
+
+    init(_ task: TorrentTask) {
+        self.task = task
+        metadata = DownloaderTaskMetadata(task)
+    }
+}
+
 /// Build the displayed list once per task/scope/search change, rather than
 /// resolving the configured server list separately for every torrent and row.
 private struct DownloaderTaskProjection {
     var currentCount = 0
     var kindsWithTasks = Set<ServiceKind>()
-    var filteredTasks: [TorrentTask] = []
+    var filteredTasks: [ProjectedDownloaderTask] = []
 
     init() {}
 
@@ -55,7 +92,7 @@ private struct DownloaderTaskProjection {
             if filter.includes(task) && (text.isEmpty || task.name.localizedCaseInsensitiveContains(text)
                 || task.category.localizedCaseInsensitiveContains(text)
                 || task.tags.contains(where: { $0.localizedCaseInsensitiveContains(text) })) {
-                filteredTasks.append(task)
+                filteredTasks.append(ProjectedDownloaderTask(task))
             }
         }
     }
@@ -132,13 +169,17 @@ struct DownloadersView: View {
                                 .font(.caption).foregroundStyle(DKTheme.muted).padding(.horizontal, 3)
                                 .accessibilityIdentifier("downloaders.taskCount")
                                 .accessibilityValue("\(projection.currentCount)/\(projection.filteredTasks.count)")
-                            ForEach(projection.filteredTasks, id: \.qualifiedID) { task in
+                            Text("完整标签见详情").font(.caption2).foregroundStyle(DKTheme.muted)
+                            Text("先在下载器中设置站点标记：qB 使用任务分类或标签，TR 使用任务标签。刷新后即可显示和搜索；App 不会自动判断站点或修改标签。")
+                                .font(.caption2).foregroundStyle(DKTheme.muted)
+                            ForEach(projection.filteredTasks) { item in
+                                let task = item.task
                                 Button { selectedTask = SelectedDownloaderTask(task: task) } label: {
                                     VStack(alignment: .leading, spacing: 5) {
                                         if selectedKind == nil {
                                             Text(verbatim: names[task.kind] ?? task.kind.title).font(.caption.weight(.semibold)).foregroundStyle(DKTheme.accent).padding(.leading, 8)
                                         }
-                                        TorrentTaskRow(task: task, isCurrent: currentKinds.contains(task.kind))
+                                        TorrentTaskRow(task: task, metadata: item.metadata, isCurrent: currentKinds.contains(task.kind))
                                     }
                                 }.buttonStyle(.plain).accessibilityIdentifier("downloaders.task.\(task.qualifiedID)")
                             }
@@ -151,7 +192,7 @@ struct DownloadersView: View {
                     }
                 }.padding(18)
             }
-            .searchable(text: $query, prompt: "搜索名称、站点或标签")
+            .searchable(text: $query, prompt: "搜索名称、分类或标签")
             .navigationTitle("下载器")
             .navigationBarTitleDisplayMode(.inline)
             .refreshable { await reload() }
@@ -345,6 +386,7 @@ struct DownloadersView: View {
 
 private struct TorrentTaskRow: View {
     let task: TorrentTask
+    let metadata: DownloaderTaskMetadata
     var isCurrent = true
     private var progress: Double { min(1, max(0, task.verification ?? task.progress)) }
     var body: some View {
@@ -368,8 +410,19 @@ private struct TorrentTaskRow: View {
                 Label(isCurrent ? Format.rate(task.downloadRate) : "—", systemImage: "arrow.down").foregroundStyle(isCurrent ? DKTheme.accent : DKTheme.muted)
                 Label(isCurrent ? Format.rate(task.uploadRate) : "—", systemImage: "arrow.up").foregroundStyle(isCurrent ? DKTheme.green : DKTheme.muted)
                 Spacer(minLength: 0)
-                if !task.category.isEmpty { Text(task.category).foregroundStyle(DKTheme.muted).lineLimit(1) }
             }.font(.caption2).monospacedDigit()
+            if let category = metadata.category {
+                Label { Text(verbatim: category).lineLimit(1) } icon: { Image(systemName: "folder") }
+                    .font(.caption.weight(.medium)).foregroundStyle(DKTheme.accent)
+                    .accessibilityLabel(Text("分类") + Text(verbatim: ": ") + Text(verbatim: category))
+                    .accessibilityIdentifier("downloaders.category." + task.qualifiedID)
+            }
+            if let labels = metadata.labels {
+                Label { Text(verbatim: labels).lineLimit(2) } icon: { Image(systemName: "tag") }
+                    .font(.caption2).foregroundStyle(DKTheme.muted)
+                    .accessibilityLabel(Text("标签") + Text(verbatim: ": ") + Text(verbatim: labels))
+                    .accessibilityIdentifier("downloaders.labels." + task.qualifiedID)
+            }
             if let error = task.error, !error.isEmpty {
                 Label(error, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(DKTheme.amber).lineLimit(3)
             }

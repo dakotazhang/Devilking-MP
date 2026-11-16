@@ -312,12 +312,42 @@ final class UITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "合成刷流 qB 列表读取于")).firstMatch.exists)
         try attachRenderedScreenshot(app, name: "18-fleet-group-tasks")
 
-        // A task-detail read never enables a write in this fixture.
         let task = app.buttons[fleetTaskID]
+        reveal(task, in: app)
+        XCTAssertTrue(task.label.contains("合成站点"), "qB's existing category remains visible alongside its labels")
+        XCTAssertTrue(task.label.contains("合成标签 qB · 片库保种 · keep · IYUU"),
+                      "Ordinary labels keep their order and maintenance labels do not occupy the front")
+
+        let seedingFilter = app.buttons["downloaders.filter.seeding"]
+        reveal(seedingFilter, in: app, towardTop: true)
+        seedingFilter.tap()
+        let trSeed = app.buttons["downloaders.task." + fleetTRID + ":" + String(repeating: "7", count: 40)]
+        reveal(trSeed, in: app)
+        XCTAssertTrue(trSeed.label.contains("正在做种"))
+        XCTAssertTrue(trSeed.label.contains("合成标签 TR · 长期保种 · keep · IYUU"),
+                      "TR's existing labels must also be shown for complete seeding tasks")
+        try attachRenderedScreenshot(app, name: "22-tr-seeding-existing-labels")
+
+        let verifyingFilter = app.buttons["downloaders.filter.verifying"]
+        reveal(verifyingFilter, in: app, towardTop: true)
+        verifyingFilter.tap()
+        let qbChecking = app.buttons["downloaders.task." + fleetQBID + ":" + String(repeating: "3", count: 40)]
+        reveal(qbChecking, in: app)
+        XCTAssertTrue(qbChecking.label.contains("合成标签 qB · 片库保种 · keep · IYUU"))
+        let trChecking = app.buttons["downloaders.task." + fleetTRID + ":" + String(repeating: "8", count: 40)]
+        reveal(trChecking, in: app)
+        XCTAssertTrue(trChecking.label.contains("合成标签 TR · 长期保种 · keep · IYUU"))
+        let allFilter = app.buttons["downloaders.filter.all"]
+        reveal(allFilter, in: app, towardTop: true)
+        allFilter.tap()
+
+        // A task-detail read never enables a write in this fixture.
         reveal(task, in: app)
         task.tap()
         XCTAssertTrue(app.navigationBars["任务详情"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["合成刷流 qB"].exists)
+        XCTAssertTrue(app.staticTexts["keep、IYUU、合成标签 qB、片库保种、合成标签 qB"].exists,
+                      "Details preserve the complete original labels, including values deduplicated only for the compact list")
         let startStop = app.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "启动此任务", "停止此任务")).firstMatch
         reveal(startStop, in: app)
         XCTAssertFalse(startStop.isEnabled)

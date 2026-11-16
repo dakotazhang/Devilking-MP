@@ -62,7 +62,7 @@ jobs:
           name: DevilkingMP-native-previews
           path: build/TestAttachments
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 3
       - name: Save IPA and verification receipt
         if: ${{ success() && (inputs.test_scope == 'all' || inputs.test_scope == '') }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -74,7 +74,7 @@ jobs:
             build/build-receipt.json
           if-no-files-found: error
           compression-level: 0
-          retention-days: 14
+          retention-days: 3
       - name: Save test results and build logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -85,4 +85,4 @@ jobs:
             build/test.log
             build/archive.log
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 3
