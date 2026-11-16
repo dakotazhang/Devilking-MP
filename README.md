@@ -4,9 +4,9 @@
 
 App 直接连接你自己配置的服务器，不使用开发者云端后台或第三方中转。影视资料、PT 搜索和海报由你的 MoviePilot 处理；服务端自身访问资料源、PT 与 Tracker 的行为取决于你的配置。
 
-当前已发布稳定版为 **[2.0.2](https://github.com/dakotazhang/Devilking-MP/releases/tag/v2.0.2)**。支持多台 qB/TR、自定义分组与状态汇总，包含大量做种任务下的切页优化；设置页将“关于口袋蕾姆”置顶、“连接配置”移至底部。安装包、源码和更新说明均可在 [Releases](https://github.com/dakotazhang/Devilking-MP/releases) 下载。
+当前版本为 **[2.0.3](https://github.com/dakotazhang/Devilking-MP/releases/tag/v2.0.3)**。任务卡片统一展示下载器已有分类和标签，TR 做种标签也可直接查看；仅复用原任务列表数据，不新增用于识别站点的 Tracker 或 PT 请求。支持多台 qB/TR、自定义分组与状态汇总，保留大量任务下的切页优化；设置页“关于”置顶、“连接配置”导入置底。安装包、完整源码和更新说明见 [Releases](https://github.com/dakotazhang/Devilking-MP/releases)。
 
-**2.0.3 发布候选正在验证**：任务卡片统一展示下载器已有分类和标签，TR 做种标签也可直接查看；仅复用原任务列表数据，不新增 Tracker 或 PT 请求。影视订阅与手选资源的说明已区分清楚，下载完成后均按 MP 现有整理配置处理，手选不会自动建立持续订阅。
+影视订阅交给 MP 按规则自动选种下载；PT 资源由你挑选具体种子后交给 MP 下载，手选不会自动建立持续订阅。两种方式均按 MP 现有目录、整理规则和媒体识别配置处理入库。
 
 ## 五个页面
 
@@ -20,15 +20,15 @@ App 直接连接你自己配置的服务器，不使用开发者云端后台或�
 
 ### 页面预览
 
-下列五张图来自 2.0.2 实际运行的 iOS 模拟器，使用明确标注的合成测试资料，不含个人服务器或 PT 账号信息。[查看截图说明](docs/screenshots/v2.0.2/README.md)。
+下列五张图来自 2.0.3 实际运行的 iOS 模拟器（测试构建 2，设备 IPA 为 build 33），使用明确标注的合成测试资料，不含个人服务器或 PT 账号信息。[查看截图说明](docs/screenshots/v2.0.3/README.md)。
 
 | 状态表 | 下载器 |
 | --- | --- |
-| ![状态表](docs/screenshots/v2.0.2/01-dashboard.png) | ![下载器](docs/screenshots/v2.0.2/02-downloaders.png) |
+| ![状态表](docs/screenshots/v2.0.3/01-dashboard.png) | ![下载器](docs/screenshots/v2.0.3/02-downloaders.png) |
 
 | 发现 | 订阅 | 设置 |
 | --- | --- | --- |
-| ![发现](docs/screenshots/v2.0.2/03-discovery.png) | ![订阅](docs/screenshots/v2.0.2/04-subscriptions.png) | ![设置](docs/screenshots/v2.0.2/05-settings.png) |
+| ![发现](docs/screenshots/v2.0.3/03-discovery.png) | ![订阅](docs/screenshots/v2.0.3/04-subscriptions.png) | ![设置](docs/screenshots/v2.0.3/05-settings.png) |
 
 qB/TR 数量没有固定槽位限制。每台使用稳定的独立身份，可自由命名为 NAS、家中下载器或刷流盒子。MoviePilot 与旧 Emby 配置各保留一个；本版不提供播放器。
 
@@ -85,7 +85,7 @@ bash scripts/build-ios.sh all
 
 测试使用合成接口与本地模拟器资料，不连接实际 PT 账号或刷流盒子。无签名 arm64 IPA 可在受支持的 TrollStore 设备安装，或使用自己的证书重签。最低 iOS 16.1，Bundle ID `top.devilkkkkk1.DevilkingMP`。
 
-自动测试覆盖核心/API/操作保护与原生界面流程，包含 5,000 条合成任务、其中 3,500 条 TR 任务的切页、搜索和筛选。2.0.1 的卡顿修正已获 iPhone 17 Pro Max 用户实测确认；2.0.2 的设置排列与五页截图由模拟器回归验证。具体结果见 Release 随附的构建验证说明。
+2.0.3 完整构建通过 **238 项核心/API/操作保护测试、11 项原生 UI 测试**及设备归档，并逐张核对 22 张模拟器预览。覆盖 5,000 条合成任务、其中 3,500 条 TR 任务的切页、搜索和筛选，含 7 项性能记录；这不是手机 FPS 或前后提速对比。此前切页修正已获 iPhone 17 Pro Max 用户实测确认；2.0.3 新标签展示仍请结合自己的设备与服务复测。实际包身份、验证范围和摘要见 Release 附件。
 
 ## 关于与许可
 
